@@ -33,7 +33,7 @@ the current repository from this device; your data stays in GitHub.
 
 ## Try it locally without GitHub
     python3 dev/preview.py    # then open http://127.0.0.1:8020
-    repository grp/data, token tokA  (tokA also opens alice/personal; tokB = second user, group repo only)
+    repository grp/data, token github_pat_tokA  (github_pat_tokA also opens alice/personal; github_pat_tokB = second user, group repo only)
 The preview uses a fake in-memory GitHub, so data disappears when you stop it.
 
 ## How it behaves
@@ -64,10 +64,14 @@ The preview uses a fake in-memory GitHub, so data disappears when you stop it.
   working draft until you publish.
 
 ## The AN PDF and highlighting
-PDFs are **not uploaded**. Open the PDF from your computer (AN versions -> Open, or AN review -> Open the AN PDF).
-The tracker saves only its name, size and a SHA-256 fingerprint, so it can warn you if you open a different file.
+When you add an AN version you can choose its PDF and tick **Store the PDF in your private data repository** (up to 50 MB).
+Stored PDFs open automatically on every device and for everyone who has access to the data repository
+(AN review -> Open the AN PDF). If you leave it unticked, only the file's name, size and a SHA-256 fingerprint are saved and
+you open the file from your own device each time (a copy is then kept in that browser so it reopens by itself).
+The fingerprint warns you if you open a different file than the recorded one.
 Use *Highlight text* (select text) or *Draw a box* (figures, tables), then attach a comment, or *Place in PDF* for a
 comment you already imported. Highlights are saved as page + position, so they follow the comment everywhere.
+Stored PDFs live in `analyses/<id>/files/` of the data repository like the plot images.
 
 ## Importing comments from an email
 On **AN review** or **Meetings** click **Import comments from email**, paste the whole email and click *Read comments*.

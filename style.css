@@ -305,3 +305,5 @@ img,canvas,video{max-width:100%}
 }
 @media (max-width:1000px){ .two,.split,.pdfwrap{grid-template-columns:minmax(0,1fr)} .two>div,.split>*{min-width:0} .row .t{min-width:0} }
 @media (max-width:1000px){ .side{left:-110vw;width:min(300px,86vw);box-shadow:none} .side.open{left:0;box-shadow:var(--shadow)} }
+
+.storechk{display:flex;gap:8px;align-items:flex-start;font-size:13px;color:var(--mut);margin-top:-4px}.storechk input{margin-top:3px}

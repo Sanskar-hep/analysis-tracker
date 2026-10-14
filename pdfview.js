@@ -58,10 +58,13 @@
     const head = `<div class="crumbs"><a href="${L('')}">Dashboard</a> / <a href="${L('/reviewer')}" data-act="to-review" data-id="${vid}">AN review</a> / PDF</div>
       <div class="pagehead"><div><h1>${anvLabel(v)} · PDF</h1><p>Open the PDF from your device. It is only shown here, never uploaded. Highlight what the convenors mentioned and attach the comment.</p></div>
       <div class="actions"><label class="btn primary" style="cursor:pointer">${PDFV.doc ? 'Choose another PDF' : 'Choose the PDF…'}<input id="pdffile" type="file" accept="application/pdf,.pdf" hidden></label>${PDFV.saved ? '<button class="btn" data-act="pdf" data-op="forget" title="Delete the copy kept in this browser">Remove saved copy</button>' : ''}</div></div>`;
-    const saved = PDFV.saved ? `<div class="meta" style="margin:-10px 0 14px">A copy is kept in this browser so it reopens by itself (never uploaded). Use <b>Remove saved copy</b> to delete it.</div>` : '';
+    const stored = v.pdf && v.pdf.file_id;
+    const saved = (stored ? `<div class="meta" style="margin:-10px 0 14px">✔ Stored in your private data repository: it opens on every device and for your group.${PDFV.saved ? ' A copy is also kept in this browser for speed.' : ''} <button class="link" data-act="pdf" data-op="unstore">Remove it from the repository</button></div>`
+      : PDFV.saved ? `<div class="meta" style="margin:-10px 0 14px">A copy is kept in this browser so it reopens by itself (never uploaded). Use <b>Remove saved copy</b> to delete it.</div>` : '');
     if (!PDFV.doc) return head + err + `<div class="card empty pdfpick"><p style="margin:0 0 6px"><b>Choose the PDF of ${anvLabel(v)}</b></p><p class="meta" style="margin:0">${rec ? 'Expected file: <span class="mono">' + rec + '</span>. The tracker checks a fingerprint so you open the right one.' : 'No PDF has been recorded for this version yet. The first one you open can be recorded.'}</p></div>`
       + (its.length ? `<div class="sechead"><h2>Comments waiting to be placed <span class="count">${todo.length}</span></h2></div>${todo.map(i => sideItem(i, false)).join('') || '<div class="card empty">All comments are placed.</div>'}` : '');
     const warn = PDFV.match === false ? `<div class="banner"><span><b>This is not the recorded file.</b> It differs from ${rec}. Highlights may not line up with the pages.</span><span class="actions"><button class="btn sm" data-act="pdf" data-op="record">Record this file instead</button></span></div>`
+      : PDFV.match !== false && !stored && PDFV.file ? `<div class="banner draft"><span><b>This PDF is only on this device.</b> Store it in your private data repository to open it on your other devices and share it with the group.</span><span class="actions"><button class="btn sm primary" data-act="pdf" data-op="store">Store in the repository</button>${PDFV.match === null ? '<button class="btn sm" data-act="pdf" data-op="record">Only record the fingerprint</button>' : ''}</span></div>`
       : PDFV.match === null ? `<div class="banner draft"><span>No PDF is recorded for ${anvLabel(v)} yet.</span><span class="actions"><button class="btn sm primary" data-act="pdf" data-op="record">Record this file (${esc(PDFV.fp.name)})</button></span></div>` : '';
     const placing = PDFV.placing ? (() => { const it = its.find(i => i.kind === PDFV.placing.kind && i.id === PDFV.placing.id); return it ? `<div class="banner draft"><span><b>Placing:</b> ${esc(it.label)} — “${esc(it.text.length > 90 ? it.text.slice(0, 90) + '…' : it.text)}”. Select the text, or switch to <b>Draw a box</b> for a figure or table.</span><span class="actions"><button class="btn sm" data-act="pdf" data-op="cancel">Cancel</button></span></div>` : ''; })() : '';
     return `${head}${saved}${warn}${placing}
@@ -85,13 +88,21 @@
       try { PDFV.error = ''; await openFile(f.files[0]); render(); } catch (e) { PDFV.error = (e && e.message) || String(e); render(); toast('Could not open this PDF: ' + PDFV.error, 'err', 10000); } finally { done(); }
     };
     if (PDFV.doc) { buildPages(); return; }
-    if (!PDFV.restoreTried) {                                    // reopen the copy kept on this device, if there is one
-      PDFV.restoreTried = true; const vid = PDFV.vid;
-      loadCopy(vid).then(async c => {
-        if (!c || !c.blob || PDFV.vid !== vid || PDFV.doc) return;
-        const done = busy('Opening your saved copy of the PDF…');
-        try { await openFile(new File([c.blob], c.name, {type: 'application/pdf'}), true); render(); } catch { await dropCopy(vid); PDFV.saved = false; } finally { done(); }
-      });
+    if (!PDFV.restoreTried) {                                    // 1) the copy on this device, 2) the copy stored in the repository
+      PDFV.restoreTried = true; const vid = PDFV.vid, v = anv(vid);
+      (async () => {
+        const stored = v && v.pdf && v.pdf.file_id;
+        const c = await loadCopy(vid);
+        if (c && c.blob) {
+          const done = busy('Opening your saved copy of the PDF…');
+          try { await openFile(new File([c.blob], c.name, {type: 'application/pdf'}), true); if (PDFV.match !== false || !stored) { render(); return; } PDFV.doc = null; } catch { await dropCopy(vid); PDFV.saved = false; } finally { done(); }
+        }
+        if (stored && PDFV.vid === vid && !PDFV.doc) {
+          const done = busy('Downloading the PDF from the repository…');
+          try { const url = await fetchImage(S.an.id, v.pdf.file_id, v.pdf.ext); const blob = await (await fetch(url)).blob(); await openFile(new File([blob], v.pdf.name, {type: 'application/pdf'})); render(); }
+          catch (e) { PDFV.error = 'The stored PDF could not be downloaded: ' + (e.message || e); render(); } finally { done(); }
+        }
+      })();
     }
   }
   async function buildPages() {
@@ -226,6 +237,13 @@
     else if (op === 'cancel') { PDFV.placing = null; render(); }
     else if (op === 'goto') jumpTo(kind, id);
     else if (op === 'unplace') { await api('POST', aurl(`/${kind === 'anc' ? 'an-comments' : 'reviews'}/${id}/anchor`), {anchor: null}); await reload(); }
+    else if (op === 'store') {
+      if (!PDFV.file) { toast('Choose the PDF first.', 'err'); return; }
+      if (PDFV.file.size > 50 * 1048576) { toast('This PDF is larger than 50 MB, so it cannot be stored in the repository.', 'err', 8000); return; }
+      const done = busy('Storing the PDF in the repository…');
+      try { await storePdf(S.an.id, PDFV.vid, PDFV.file, PDFV.fp); await reload(); toast('Stored. It now opens on every device.'); } catch (e) { toast(e.message, 'err', 8000); } finally { done(); }
+    }
+    else if (op === 'unstore') { confirmBox('Remove the stored PDF', 'Delete the PDF from the data repository? Its name and fingerprint stay recorded, and a copy on this device (if any) is kept.', 'Remove', async () => { await api('DELETE', aurl(`/versions/${PDFV.vid}/pdf`)); await reload(); }); }
     else if (op === 'forget') { await dropCopy(PDFV.vid); PDFV.saved = false; PDFV.doc = null; PDFV.restoreTried = true; render(); toast('Removed the saved copy from this device'); }
     else if (op === 'record') { await api('PATCH', aurl('/versions/' + PDFV.vid), {pdf: PDFV.fp}); PDFV.match = true; if (PDFV.file) await saveCopy(PDFV.vid, PDFV.file); await reload(); toast('PDF recorded for ' + anvLabel(anv(PDFV.vid))); }
   }

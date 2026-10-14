@@ -327,7 +327,8 @@ function anFields(cur = {}, forceWritten = false) {
     + (forceWritten ? '' : field('AN status', radios('an_status', [['being_written', 'AN being written'], ['published', 'Version published']], cur.an_status || 'being_written')));
 }
 /* AN PDFs stay on the user's computer: only name, size and a SHA-256 fingerprint are saved, to check later that the right file is opened */
-const pdfField = hint => field('AN PDF', '<input type="file" name="pdf" accept="application/pdf,.pdf">', hint || '<b>Nothing is uploaded or displayed here.</b> The PDF stays on your computer. The tracker saves only its name, size and a fingerprint. To read it and highlight comments, open <b>AN review → Open the AN PDF</b> and choose the same file.', true);
+const pdfField = hint => field('AN PDF', '<input type="file" name="pdf" accept="application/pdf,.pdf">', hint || 'Optional. Choose the PDF of this AN version.', true)
+  + '<label class="storechk"><input type="checkbox" name="store" checked> <span>Store the PDF in your private data repository, so it opens on <b>every device</b> and for your group (up to 50 MB). If unticked, only its name and fingerprint are saved and the file stays on your computer.</span></label>';
 async function pdfFingerprint(file) {
   if (!file || !file.size) return null;
   const h = new Uint8Array(await crypto.subtle.digest('SHA-256', await file.arrayBuffer()));
@@ -342,7 +343,19 @@ function bindAnStage(f, optional) {   // show the version fields only when "Vers
   };
   f.querySelectorAll('[name=stage],[name=an_status]').forEach(x => x.addEventListener('change', upd)); upd();
 }
-const pdfToast = fd => { const f = fd.get('pdf'); if (f && f.size) toast(`PDF recorded: ${f.name}. It stays on your computer: open it from AN review → Open the AN PDF.`, '', 8000); };
+async function storePdf(aid, vid, file, fp) {          // put the PDF itself into the data repository
+  const up = await api('POST', `/analyses/${aid}/upload`, undefined, {raw: file});
+  await api('POST', `/analyses/${aid}/versions/${vid}/pdf`, {file_id: up.file_id, pdf: fp});
+}
+async function pdfAfter(fd, aid, vid) {
+  const f = fd.get('pdf'); if (!f || !f.size) return;
+  if (fd.get('store') && vid) {
+    const done = busy('Storing the PDF in the repository…');
+    try { await storePdf(aid, vid, f, await pdfFingerprint(f)); toast(`PDF stored: ${f.name}. Open it on any device from AN review → Open the AN PDF.`, '', 8000); }
+    catch (e) { toast('The PDF could not be stored: ' + e.message + ' Its name and fingerprint were saved; you can store it later from the PDF viewer.', 'err', 12000); }
+    finally { done(); }
+  } else toast(`PDF recorded: ${f.name}. It stays on your computer; open it from AN review → Open the AN PDF.`, '', 8000);
+}
 async function anStageBody(fd) {
   const b = {an_name: fd.get('an_name').trim(), collaboration: fd.get('collaboration').trim(), an_status: fd.get('an_status')};
   if (b.an_status === 'published') {
@@ -360,7 +373,9 @@ function newAnalysisModal() {
     onSubmit: async fd => {
       const body = {title: fd.get('title').trim(), stage: fd.get('stage')};
       if (body.stage === 'an_stage') Object.assign(body, await anStageBody(fd));
-      const r = await api('POST', '/analyses', body); go('#/a/' + r.id); pdfToast(fd);
+      const r = await api('POST', '/analyses', body);
+      if (body.first_version) { const g = await api('GET', '/analyses/' + r.id); await pdfAfter(fd, r.id, g.an_versions[0]?.id); }
+      go('#/a/' + r.id);
     }});
 }
 
@@ -506,7 +521,7 @@ function viewReviewer() {
   const all = [...figUs.flatMap(u => u.reviews).filter(r => !r.none), ...ancAll], nP = all.filter(r => r.status === 'pending').length;
   const kinds = [...new Set(ancAll.map(x => x.kind))];
   const pdf = c.v.pdf;
-  return `${banner()}<div class="pagehead"><div><h1>AN review · ${c.label}</h1><p>${nP} pending · ${all.length - nP} resolved. These comments stay with ${c.label} even after newer versions are published.<br><span class="meta">AN PDF: ${pdf ? esc(pdf.name) + ' (stays on your computer)' : 'not recorded yet'} — use <b>Open the AN PDF</b>.</span></p></div>
+  return `${banner()}<div class="pagehead"><div><h1>AN review · ${c.label}</h1><p>${nP} pending · ${all.length - nP} resolved. These comments stay with ${c.label} even after newer versions are published.<br><span class="meta">AN PDF: ${pdf ? esc(pdf.name) + (pdf.file_id ? ' (stored in the repository: opens on any device)' : ' (kept on your computer only)') : 'not recorded yet'} — use <b>Open the AN PDF</b>.</span></p></div>
     <div class="actions"><button class="btn" data-act="open-pdf" data-v="${c.id}">Open the AN PDF${pdf ? '' : ' …'}</button><button class="btn" data-act="import-email" data-type="note">Import comments from email</button><button class="btn" data-act="reply-doc">Reply document</button><button class="btn primary" data-act="add-anc">+ Add comment</button></div></div>
     <div class="chips" style="margin-bottom:6px">${[['all', 'All'], ['pending', 'Pending'], ['resolved', 'Resolved']].map(([k, l]) => `<span class="chip ${f === k ? 'on' : ''}" data-act="rfilter" data-id="${k}">${l}</span>`).join('')}</div>
     <div class="sechead"><h2>Comments on figures <span class="count">${figShown.length}</span></h2></div>
@@ -643,7 +658,7 @@ function viewVersions() {
     const pv = S.versions.filter(x => x.anvId === v.id).length, docs = S.docs.filter(d => d.anvId === v.id).length;
     return `<tr><td><b>AN v${v.number}</b> ${i === 0 ? '<span class="badge ok">latest</span>' : ''}</td><td>${fmtDay(v.published_on)}</td><td>${figs.length}</td><td>${pv}</td>
       <td>${rv.filter(r => r.status === 'pending').length ? `<span class="badge pending">${rv.filter(r => r.status === 'pending').length} pending</span>` : ''}<span class="badge resolved">${rv.filter(r => r.status === 'resolved').length} resolved</span></td><td>${docs}</td>
-      <td>${v.pdf ? `<span class="meta" title="${esc(v.pdf.name)}">${esc(v.pdf.name.length > 24 ? v.pdf.name.slice(0, 22) + '…' : v.pdf.name)}</span><br>` : ''}<button class="btn sm" data-act="open-pdf" data-v="${v.id}">${v.pdf ? 'Open' : 'Open / record'}</button></td>
+      <td>${v.pdf ? `<span class="meta" title="${esc(v.pdf.name)}">${esc(v.pdf.name.length > 24 ? v.pdf.name.slice(0, 22) + '…' : v.pdf.name)}</span><br><span class="badge ${v.pdf.file_id ? 'ok' : ''}">${v.pdf.file_id ? 'stored' : 'on your computer'}</span><br>` : ''}<button class="btn sm" data-act="open-pdf" data-v="${v.id}">${v.pdf ? 'Open' : 'Open / record'}</button></td>
       <td class="pre">${esc(v.notes) || '<span class="meta">—</span>'}</td>
       <td style="white-space:nowrap"><button class="btn sm" data-act="open-anv" data-id="${v.id}">Open</button> <button class="btn sm" data-act="edit-anv" data-id="${v.id}">Edit</button></td></tr>`;
   }).join('');
@@ -665,13 +680,13 @@ function publishModal(editV) {
     onSubmit: async fd => {
       const n = parseInt(fd.get('number'), 10); if (!(n >= 1)) throw new Error('Version number must be a positive whole number');
       const r = await api('POST', aurl('/versions'), {number: n, published_on: fd.get('published_on') || today(), notes: fd.get('notes').trim(), carry_figures: !!fd.get('carry'), pdf: await pdfFingerprint(fd.get('pdf'))});
-      await loadAnalysis(S.an.id); setCtx(r.id); toast(`AN v${r.number} published${r.carried ? ` — ${r.carried} figure(s) carried over` : ''}`); go(L('')); render(); pdfToast(fd);
+      await pdfAfter(fd, S.an.id, r.id); await loadAnalysis(S.an.id); setCtx(r.id); toast(`AN v${r.number} published${r.carried ? ` — ${r.carried} figure(s) carried over` : ''}`); go(L('')); render();
     }});
 }
 function editAnvModal(v) {
   openModal({title: `Edit AN v${v.number}`, body: field('Publication date', `<input type="date" name="published_on" value="${esc(v.published_on)}">`) + field('Notes', `<textarea name="notes">${esc(v.notes)}</textarea>`, '', true)
-      + pdfField(v.pdf ? `Recorded: ${esc(v.pdf.name)} (${(v.pdf.size / 1048576).toFixed(1)} MB). Choose a file only to replace it.` : undefined),
-    onSubmit: async fd => { const b = {published_on: fd.get('published_on'), notes: fd.get('notes')}; const p = await pdfFingerprint(fd.get('pdf')); if (p) b.pdf = p; await api('PATCH', aurl('/versions/' + v.id), b); await reload(); pdfToast(fd); }});
+      + pdfField(v.pdf ? `Recorded: ${esc(v.pdf.name)} (${(v.pdf.size / 1048576).toFixed(1)} MB)${v.pdf.file_id ? ', stored in the repository' : ''}. Choose a file only to replace it.` : undefined),
+    onSubmit: async fd => { const b = {published_on: fd.get('published_on'), notes: fd.get('notes')}; const p = await pdfFingerprint(fd.get('pdf')); if (p) b.pdf = p; await api('PATCH', aurl('/versions/' + v.id), b); await pdfAfter(fd, S.an.id, v.id); await reload(); }});
 }
 
 /* ---- documents ---- */
@@ -728,7 +743,8 @@ function moveToAnModal() {
     body: anStageFields(), setup: f => bindAnStage(f, false),
     onSubmit: async fd => {
       await api('PATCH', aurl(''), {title: a.title, stage: 'an_stage', ...(await anStageBody(fd))});
-      await loadAnalysis(S.an.id); if (isPub()) setCtx(latestAnv().id); toast('Moved to the AN stage'); go(L('')); render(); pdfToast(fd);
+      await loadAnalysis(S.an.id); if (isPub()) { setCtx(latestAnv().id); await pdfAfter(fd, S.an.id, latestAnv().id); await loadAnalysis(S.an.id); }
+      toast('Moved to the AN stage'); go(L('')); render();
     }});
 }
 

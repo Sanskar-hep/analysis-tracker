@@ -25,7 +25,7 @@ const IMG_CACHE = {};                   // file id -> object URL
 const nid = () => { const a = new Uint8Array(8); crypto.getRandomValues(a); return [...a].map(x => x.toString(16).padStart(2, '0')).join(''); };
 const now = () => Date.now();
 const todayStr = () => new Date().toISOString().slice(0, 10);
-const MIME = {'.png': 'image/png', '.jpg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml'};
+const MIME = {'.png': 'image/png', '.jpg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.pdf': 'application/pdf'};
 function sv(b, k, max = 500, req = false, def = '') {
   let v = b[k]; if (v === undefined || v === null) v = def;
   if (typeof v !== 'string') throw E(400, `"${k}" must be text`);
@@ -370,11 +370,29 @@ const H = {
     a.an_status = 'published';
     return {id: vid, number: num, carried};
   }, {message: 'Publish AN version'}),
-  updateVersion: ({aid, id}, b) => tx(aid, st => {
+  updateVersion: ({aid, id}, b) => tx(aid, (st, io) => {
     const v = byId(st.an_versions, id, 'Version');
     v.published_on = dateOk(sv(b, 'published_on', 10, false, v.published_on) || v.published_on, 'published_on'); v.notes = sv(b, 'notes', 2000, false, v.notes);
-    if (b.pdf !== undefined) v.pdf = pdfInfo(b.pdf); return {ok: true};
+    if (b.pdf !== undefined) {
+      const old = v.pdf, nw = pdfInfo(b.pdf);
+      if (old && old.file_id) { if (nw && old.sha256 === nw.sha256) { nw.file_id = old.file_id; nw.ext = old.ext; } else dropStoredPdf(st, io, old); }
+      v.pdf = nw;
+    }
+    return {ok: true};
   }, {message: 'Edit AN version'}),
+  /* the AN PDF itself, stored in the repository so every device (and the group) can open it */
+  setVersionPdf: ({aid, id}, b) => tx(aid, (st, io) => {
+    const v = byId(st.an_versions, id, 'Version'), info = pdfInfo(b.pdf), fid = sv(b, 'file_id', 40, true), up = PENDING.get(fid);
+    if (!info) throw E(400, 'PDF details are missing');
+    if (!up || up.aid !== st.analysis.id || up.ext !== '.pdf') throw E(400, 'Upload the PDF first');
+    if (st.files.some(f => f.id === fid)) throw E(400, 'That upload was already used');
+    if (v.pdf && v.pdf.file_id) dropStoredPdf(st, io, v.pdf);
+    st.files.push({id: fid, ext: '.pdf', size: up.blob.size, created: now()}); io.newFiles.push(fid);
+    v.pdf = {...info, file_id: fid, ext: '.pdf'}; return {ok: true};
+  }, {message: 'Store AN PDF'}),
+  removeVersionPdf: ({aid, id}) => tx(aid, (st, io) => {
+    const v = byId(st.an_versions, id, 'Version'); if (v.pdf && v.pdf.file_id) { dropStoredPdf(st, io, v.pdf); delete v.pdf.file_id; delete v.pdf.ext; } return {ok: true};
+  }, {message: 'Remove stored AN PDF'}),
 
   /* ---- categories / plots ---- */
   createCategory: ({aid}, b) => tx(aid, st => {
@@ -389,11 +407,11 @@ const H = {
   async upload({aid}, b, o) {
     await readState(aid);
     const blob = o.raw; if (!blob || !blob.size) throw E(400, 'Empty upload');
-    if (blob.size > 25 * 1024 * 1024) throw E(413, 'Image is too large (max 25 MB)');
     const h = new Uint8Array(await blob.slice(0, 4096).arrayBuffer()), asc = String.fromCharCode(...h), ext =
       (h[0] === 0x89 && asc.slice(1, 4) === 'PNG') ? '.png' : (h[0] === 0xff && h[1] === 0xd8) ? '.jpg' : /^GIF8[79]a/.test(asc) ? '.gif'
-        : (asc.slice(0, 4) === 'RIFF' && asc.slice(8, 12) === 'WEBP') ? '.webp' : /<svg/i.test(asc) ? '.svg' : null;
-    if (!ext) throw E(400, 'Unsupported file. Please upload a PNG, JPG, GIF, WebP or SVG image.');
+        : (asc.slice(0, 4) === 'RIFF' && asc.slice(8, 12) === 'WEBP') ? '.webp' : /<svg/i.test(asc) ? '.svg' : asc.slice(0, 5) === '%PDF-' ? '.pdf' : null;
+    if (!ext) throw E(400, 'Unsupported file. Please upload a PNG, JPG, GIF, WebP or SVG image, or a PDF.');
+    if (ext === '.pdf' ? blob.size > 50 * 1024 * 1024 : blob.size > 25 * 1024 * 1024) throw E(413, ext === '.pdf' ? 'This PDF is larger than 50 MB. Keep it on your computer instead of storing it in the repository.' : 'Image is too large (max 25 MB)');
     const fid = nid(), typed = new Blob([blob], {type: MIME[ext]});
     PENDING.set(fid, {blob: typed, ext, aid}); IMG_CACHE[fid] = URL.createObjectURL(typed);
     return {file_id: fid, ext};
@@ -518,6 +536,11 @@ function anCommentFields(b, source = 'an') {
   if (source === 'meeting') { f.meeting = sv(b, 'meeting', 100, true); f.meeting_date = dateOk(sv(b, 'meeting_date', 10), 'meeting_date'); }
   return f;
 }
+function dropStoredPdf(st, io, pdf) {                        // remove the stored PDF file from the repository
+  const f = st.files.find(x => x.id === pdf.file_id); if (!f) return;
+  st.files = st.files.filter(x => x !== f);
+  if (io.newFiles.includes(f.id)) io.newFiles = io.newFiles.filter(x => x !== f.id); else io.delFiles.push(filePath(st.analysis.id, f));
+}
 function pdfInfo(p) {
   if (p === null || p === undefined) return null;
   if (typeof p !== 'object') throw E(400, 'Invalid PDF details');
@@ -525,7 +548,7 @@ function pdfInfo(p) {
   if (!/^[0-9a-f]{64}$/.test(sha)) throw E(400, 'Invalid PDF fingerprint');
   if (!Number.isInteger(p.size) || p.size < 0) throw E(400, 'Invalid PDF size');
   if (p.pages != null && !(Number.isInteger(p.pages) && p.pages > 0)) throw E(400, 'Invalid page count');
-  return {name: sv(p, 'name', 200, true), size: p.size, sha256: sha, pages: p.pages ?? null};
+  return {name: sv(p, 'name', 200, true), size: p.size, sha256: sha, pages: p.pages ?? null};   // file_id/ext are set only by the server-side store/remove actions
 }
 /* a highlight in the PDF: page number + rectangles as fractions of the page (independent of zoom) + the highlighted text */
 function anchorOk(a) {
@@ -593,6 +616,7 @@ const ROUTES = [
   R('GET', '^\\/analyses$', H.list), R('POST', '^\\/analyses$', H.createAnalysis),
   R('GET', A_ + '$', H.getAnalysis), R('PATCH', A_ + '$', H.updateAnalysis), R('DELETE', A_ + '$', H.deleteAnalysis), R('GET', A_ + '\\/export$', H.exportAnalysis),
   R('POST', A_ + '\\/versions$', H.publish), R('PATCH', A_ + `\\/versions\\/(?<id>${ID})$`, H.updateVersion),
+  R('POST', A_ + `\\/versions\\/(?<id>${ID})\\/pdf$`, H.setVersionPdf), R('DELETE', A_ + `\\/versions\\/(?<id>${ID})\\/pdf$`, H.removeVersionPdf),
   R('POST', A_ + '\\/categories$', H.createCategory), R('DELETE', A_ + `\\/categories\\/(?<id>${ID})$`, H.deleteCategory),
   R('POST', A_ + '\\/upload$', H.upload),
   R('POST', A_ + '\\/plots$', H.createPlot), R('DELETE', A_ + `\\/plots\\/(?<id>${ID})$`, H.deletePlot),
