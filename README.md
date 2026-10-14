@@ -92,3 +92,9 @@ The text is split into separate comments in your browser (cover note, greetings 
 ## Data layout in the data repo
     analyses/<id>/state.json             records of one analysis
     analyses/<id>/files/<fileid>.<ext>   plot images
+
+## License and credit
+Analysis-Tracker is designed and built by **Sanskar Nanda** (https://github.com/Sanskar-hep) and released under the
+MIT License (see `LICENSE`). You may use and modify it, but you must keep the copyright and licence notice, and
+the "Designed & built by" credit in the footer should stay. The bundled PDF.js (`vendor/pdfjs/`) is Apache-2.0
+(c) Mozilla and keeps its own licence.

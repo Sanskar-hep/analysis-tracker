@@ -1,3 +1,4 @@
+/*! Analysis-Tracker - Copyright (c) 2026 Sanskar Nanda - MIT License (see LICENSE). https://github.com/Sanskar-hep */
 /* AN PDF viewer with highlights.
  * The PDF is opened from the user's computer and never uploaded. What is saved is only where a comment points:
  * page number + rectangles as fractions of the page (so they line up at any zoom) + the highlighted text.
@@ -35,7 +36,7 @@
   function items(vid) {
     const out = [];
     S.anc.filter(c => c.source === 'an' && c.anvId === vid).forEach(c => out.push({kind: 'anc', id: c.id, text: c.text, label: c.location || COMMENT_KINDS[c.kind] || 'Comment', who: whoStr(c), status: c.status, answer: c.answer, anchor: c.anchor}));
-    S.usages.filter(u => u.type === 'note' && u.anvId === vid).forEach(u => u.reviews.filter(r => !r.none).forEach(r => out.push({kind: 'rev', id: r.id, text: r.text, label: 'Fig ' + u.fig, who: whoStr(r), status: r.status, answer: r.answer, anchor: r.anchor})));
+    S.usages.filter(u => u.type === 'note' && u.anvId === vid).forEach(u => u.reviews.filter(r => !r.none).forEach(r => out.push({kind: 'rev', id: r.id, text: r.text, label: 'Fig ' + u.fig + (u.panel && r.scope !== 'figure' ? ' · ' + u.panel : ''), who: whoStr(r), status: r.status, answer: r.answer, anchor: r.anchor})));
     return out;
   }
   const cls = it => it.status === 'resolved' ? 'resolved' : (it.answer || '').trim() ? 'answered' : 'pending';
@@ -206,20 +207,32 @@
   function newCommentModal(an) {
     const v = anv(PDFV.vid), figs = S.usages.filter(u => u.type === 'note' && u.anvId === PDFV.vid).sort((a, b) => a.fig.localeCompare(b.fig, undefined, {numeric: true}));
     const last = (() => { try { return JSON.parse(localStorage.getItem('at_last_reviewer') || '{}'); } catch { return {}; } })();
-    const figOpts = figs.map(u => { const pv = ver(u.versionId); return `<option value="${u.id}">Fig ${esc(u.fig)} — ${esc(plot(pv.plotId).name)} ${verLabel(pv)}</option>`; }).join('');
+    const groups = figGroups(figs);
+    const figOpts = groups.map(g => { const pv = ver(g[0].versionId); return `<option value="${esc(g[0].fig)}">Fig ${esc(g[0].fig)} — ${g.length > 1 ? g.length + ' plots' : esc(plot(pv.plotId).name) + ' ' + verLabel(pv)}</option>`; }).join('');
     openModal({title: 'Comment on the highlighted part', wide: true, submit: 'Save comment',
       sub: `${anvLabel(v)} · page ${an.page}${an.quote ? ' · “' + esc(an.quote.length > 140 ? an.quote.slice(0, 140) + '…' : an.quote) + '”' : ' · marked area'}`,
       body: field('What is it about?', radios('kind', [['figure', 'A figure'], ['table', 'A table'], ['text', 'Text'], ['general', 'General / other']], an.kind === 'box' ? 'figure' : 'text'))
-        + `<div id="figbox">${field('Which figure?', `<select name="fig"><option value="">— figure not recorded in the tracker —</option>${figOpts}</select>`, 'Figures you recorded under “+ Analysis Note” on a plot are listed. Choosing one attaches the comment to that plot.')}${field('Figure number', '<input type="text" name="fignum" maxlength="20" placeholder="e.g. 31 (only if not listed above)">', '', true)}</div>`
+        + `<div id="figbox">${field('Which figure?', `<select name="fig"><option value="">— figure not recorded in the tracker —</option>${figOpts}</select>`, 'Figures you recorded under “+ Analysis Note” on a plot are listed. Choosing one attaches the comment to that figure.')}<div id="panelbox" style="display:none">${field('Which panel?', '<select name="panel"></select>', 'The era or plot the convener means.')}</div>${field('Figure number', '<input type="text" name="fignum" maxlength="20" placeholder="e.g. 31 (only if not listed above)">', '', true)}</div>`
         + `<div class="cols">${field('Kind of reviewer', `<select name="role">${CTX.note.roles.map(x => `<option ${last.role === x ? 'selected' : ''}>${x}</option>`).join('')}</select>`)}${field('Name', `<input type="text" name="name" maxlength="100" value="${esc(last.name || '')}">`, '', true)}</div>`
         + field('Where (optional label)', `<input type="text" name="location" maxlength="80" placeholder="e.g. Sec 3.1, Tab 10">`, '', true)
         + field('The comment', '<textarea name="text" required maxlength="5000" style="min-height:110px" placeholder="Paste or type what the convener said"></textarea>'),
-      setup: f => { const upd = () => { $('#figbox', f).style.display = f.kind.value === 'figure' ? 'grid' : 'none'; }; f.querySelectorAll('[name=kind]').forEach(x => x.addEventListener('change', upd)); upd(); },
+      setup: f => {
+        const upd = () => { $('#figbox', f).style.display = f.kind.value === 'figure' ? 'grid' : 'none'; };
+        f.querySelectorAll('[name=kind]').forEach(x => x.addEventListener('change', upd)); upd();
+        const pan = () => {                                         // a figure with several plots asks which panel
+          const g = groups.find(x => x[0].fig === f.fig.value), box = $('#panelbox', f);
+          if (!g || g.length < 2) { box.style.display = 'none'; f.panel.innerHTML = ''; return; }
+          f.panel.innerHTML = `<option value="figure">The whole figure</option>${g.map(u => `<option value="${u.id}">${esc(panelName(u))}</option>`).join('')}`; box.style.display = 'block';
+        };
+        f.fig.addEventListener('change', pan);
+      },
       onSubmit: async fd => {
         const kind = fd.get('kind'), body = {role: fd.get('role'), name: fd.get('name').trim(), text: fd.get('text').trim()};
         try { localStorage.setItem('at_last_reviewer', JSON.stringify({role: body.role, name: body.name})); } catch {}
-        if (kind === 'figure' && fd.get('fig')) {                    // a recorded figure: the comment goes under that plot
-          const r = await api('POST', aurl(`/usages/${fd.get('fig')}/reviews`), body); await api('POST', aurl(`/reviews/${r.id}/anchor`), {anchor: an});
+        if (kind === 'figure' && fd.get('fig')) {                    // a recorded figure: the comment goes under that figure (and panel)
+          const g = groups.find(x => x[0].fig === fd.get('fig')), pick = fd.get('panel');
+          const use = g.length > 1 && pick && pick !== 'figure' ? g.find(x => x.id === pick) : g[0];
+          const r = await api('POST', aurl(`/usages/${use.id}/reviews`), {...body, scope: g.length > 1 && (!pick || pick === 'figure') ? 'figure' : 'panel'}); await api('POST', aurl(`/reviews/${r.id}/anchor`), {anchor: an});
         } else {
           const num = fd.get('fignum').trim(), loc = fd.get('location').trim() || (kind === 'figure' && num ? 'Fig ' + num : '');
           const r = await api('POST', aurl('/an-comments'), {source: 'an', an_version_id: PDFV.vid, kind, location: loc, ...body}); await api('POST', aurl(`/an-comments/${r.id}/anchor`), {anchor: an});

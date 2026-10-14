@@ -1,3 +1,4 @@
+/*! Analysis-Tracker - Copyright (c) 2026 Sanskar Nanda - MIT License (see LICENSE). */
 :root{
   --bg:#f5f6f8; --panel:#ffffff; --ink:#151a22; --mut:#5f6978; --line:#e2e5ea; --soft:#eef1fb;
   --acc:#3b5bdb; --acc-ink:#ffffff; --danger:#d6336c;
@@ -307,3 +308,20 @@ img,canvas,video{max-width:100%}
 @media (max-width:1000px){ .side{left:-110vw;width:min(300px,86vw);box-shadow:none} .side.open{left:0;box-shadow:var(--shadow)} }
 
 .storechk{display:flex;gap:8px;align-items:flex-start;font-size:13px;color:var(--mut);margin-top:-4px}.storechk input{margin-top:3px}
+
+/* figures made of several plots */
+.panels{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;padding:0 16px 14px}
+.panel{border:1px solid var(--line);border-radius:10px;overflow:hidden;cursor:pointer;background:var(--panel)} .panel:hover{border-color:var(--acc)}
+.panel .pimg{background:#fff;aspect-ratio:4/3;display:grid;place-items:center} .panel .pimg img{width:100%;height:100%;object-fit:contain}
+.panel .pl{padding:6px 10px;display:grid;font-size:12.5px} .panel .pl span{color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fbrow{margin-bottom:-6px}
+
+/* credit: always visible, highlighted */
+.credit{text-align:center;padding:18px 12px 26px;font-size:13px;color:var(--mut)}
+.credit a{color:inherit;text-decoration:none}
+.credit b{background:linear-gradient(90deg,var(--acc),var(--note));-webkit-background-clip:text;background-clip:text;color:transparent;font-size:14.5px;letter-spacing:.01em;padding:0 2px;border-bottom:2px solid color-mix(in srgb,var(--acc) 55%,transparent)}
+.credit a:hover b{filter:brightness(1.15)}
+.by{padding:0 8px 10px 48px;margin-top:-12px;font-size:12px;color:var(--mut)}
+.by a{background:linear-gradient(90deg,var(--acc),var(--note));-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:700;text-decoration:none}
+.authwrap .credit{position:absolute;bottom:0;left:0;right:0;padding:10px}
+.authwrap{position:relative}

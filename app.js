@@ -1,7 +1,10 @@
+/*! Analysis-Tracker - Copyright (c) 2026 Sanskar Nanda - MIT License (see LICENSE). https://github.com/Sanskar-hep */
 /* Analysis-Tracker front end. Data lives in a GitHub repository (see backend.js); this file renders it and calls api(). */
 'use strict';
 
 /* ============================ helpers ============================ */
+const CREDIT = {name: 'Sanskar Nanda', url: 'https://github.com/Sanskar-hep'};
+const creditLine = () => `<div class="credit">Designed &amp; built by <a href="${CREDIT.url}" target="_blank" rel="noopener noreferrer"><b>${CREDIT.name}</b></a></div>`;
 const $ = (s, el = document) => el.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmtDate = t => new Date(t).toLocaleDateString(undefined, {day:'numeric', month:'short', year:'numeric'});
@@ -27,7 +30,7 @@ function norm(st) {
     plots: st.plots.map(p => ({...p, catId: p.category_id})),
     versions: st.plot_versions.map(v => ({...v, plotId: v.plot_id, parentId: v.parent_id, anvId: v.an_version_id, fileName: v.file_name})),
     usages: st.usages.map(u => ({...u, versionId: u.plot_version_id, anvId: u.an_version_id, anVer: u.an_ver,
-      reviews: u.reviews.map(r => ({...r, none: !!r.none, resolvedVersionId: r.resolved_version_id, resolvedAt: r.resolved_at}))})),
+      reviews: u.reviews.map(r => ({...r, none: !!r.none, resolvedVersionId: r.resolved_version_id, resolvedMore: r.resolved_more || [], resolvedAt: r.resolved_at}))})),
     docs: st.documents.map(d => ({...d, anvId: d.an_version_id})),
     anc: (st.an_comments || []).map(c => ({...c, anvId: c.an_version_id, resolvedIn: c.resolved_in})),
   };
@@ -109,6 +112,25 @@ const useTitle = u => u.type === 'note' ? `Analysis Note · Fig ${u.fig}` : `${m
 const findReview = id => { for (const u of S.usages) { const r = u.reviews.find(x => x.id === id); if (r) return {u, r}; } return null; };
 const L = p => `#/a/${S.an.id}${p}`;
 
+/* ---- one AN figure can be made of several plots ("panels", e.g. one per era) ---- */
+const sameFigUses = u => S.usages.filter(x => x.type === 'note' && x.fig === u.fig && (x.anvId || null) === (u.anvId || null)).sort((a, b) => a.created - b.created);
+const panelName = u => u.panel || plot(ver(u.versionId).plotId).name;
+const figGroups = us => { const m = new Map(); us.forEach(u => { if (!m.has(u.fig)) m.set(u.fig, []); m.get(u.fig).push(u); }); return [...m.values()].map(g => g.sort((a, b) => a.created - b.created)); };
+/* eras written in different ways: "UL18", "UL2018", "2016post", "2016postVFP", "UL16 pre" -> comparable keys */
+function eraKeys(s) {
+  const out = new Set(), t = String(s || '');
+  const add = (yy, pp) => { const yr = '20' + yy, p = (pp || '').toLowerCase(); if (p) out.add(yr + p); else if (yr === '2016') { out.add('2016pre'); out.add('2016post'); } else out.add(yr); };
+  for (const m of t.matchAll(/UL\s*(?:20)?(16|17|18)(?!\d)\s*[-_ ]?\s*(pre|post)?/gi)) add(m[1], m[2]);
+  for (const m of t.matchAll(/(?<!\d)20(16|17|18)(?!\d)\s*[-_ ]?\s*(pre|post)?/gi)) add(m[1], m[2]);
+  for (const m of t.matchAll(/(?<!\d)(16|17|18)\s*[-_ ]?(pre|post)/gi)) add(m[1], m[2]);
+  return out;
+}
+function panelMatches(label, text) {
+  const l = eraKeys(label); if (l.size) { const t = eraKeys(text); return [...l].some(k => t.has(k)); }
+  return String(label || '').trim().length >= 3 && String(text || '').toLowerCase().includes(String(label).trim().toLowerCase());
+}
+const eraLabelOf = name => (String(name || '').match(/UL\s?20\d\d(?:pre|post)?(?:VFP)?|20\d\d\s?(?:pre|post)?(?:VFP)?|UL\s?1[678](?:\s?(?:pre|post))?/i) || [''])[0].replace(/\s+/g, '');
+
 /* ============================ ui primitives ============================ */
 function toast(msg, kind = '', ms) {
   const t = document.createElement('div'); t.className = 'toast ' + kind; t.textContent = msg; document.body.appendChild(t);
@@ -181,7 +203,7 @@ function showConnect(msg = '') {
         <li><b>Only select repositories</b> → the data repository.</li>
         <li>Permissions → Repository → <b>Contents: Read and write</b>. Generate and paste it above.</li>
       </ol></details>
-  </div></div>`;
+  </div>${creditLine()}</div>`;
   const f = $('#authform');
   $('#showtok').onchange = e => { $('#tokinput').type = e.target.checked ? 'text' : 'password'; };
   document.querySelectorAll('[data-saved]').forEach(c => c.onclick = async () => {
@@ -222,11 +244,11 @@ function addRepoModal() {
 /* ============================ shell ============================ */
 function mountShell() {
   document.title = 'Analysis-Tracker';
-  $('#root').innerHTML = `<div class="app"><nav class="side" id="side"></nav><div class="main"><div class="top" id="top"></div><main class="content" id="main"></main></div></div>`;
+  $('#root').innerHTML = `<div class="app"><nav class="side" id="side"></nav><div class="main"><div class="top" id="top"></div><main class="content" id="main"></main>${creditLine()}</div></div>`;
   $('#top').addEventListener('input', onSearch);
 }
 const logoSvg = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20h18M6 16v-5M11 16V6M16 16v-8M21 16v-3"/></svg>';
-const brand = `<a href="#/" class="brand" style="color:var(--ink)"><div class="logo">${logoSvg}</div>Analysis-Tracker</a>`;
+const brand = `<a href="#/" class="brand" style="color:var(--ink)"><div class="logo">${logoSvg}</div>Analysis-Tracker</a><div class="by">by <a href="${CREDIT.url}" target="_blank" rel="noopener noreferrer">${CREDIT.name}</a></div>`;
 
 function stageBadges(a) {
   if (a.stage === 'just_started') return '<span class="badge stage">Just started</span>';
@@ -515,17 +537,18 @@ function viewReviewer() {
   if (ctx().draft) return `${banner()}<div class="card empty">AN review comments belong to a published AN version. Select an AN version in the “Viewing” menu above.</div>`;
   const f = ui.rf || 'all', c = ctx(), kf = ui.rk || 'all';
   const figUs = cNotes().sort((a, b) => a.fig.localeCompare(b.fig, undefined, {numeric: true}));
-  const figShown = figUs.filter(u => f === 'all' || u.reviews.some(r => !r.none && (f === 'resolved' ? r.status === 'resolved' : r.status === 'pending')));
+  const figKeep = new Set(figGroups(figUs).filter(g => f === 'all' || g.some(u => u.reviews.some(r => !r.none && (f === 'resolved' ? r.status === 'resolved' : r.status === 'pending')))).map(g => g[0].fig));
+  const figShown = figUs.filter(u => figKeep.has(u.fig));
   const ancAll = S.anc.filter(x => x.source === 'an' && x.anvId === c.id);
   const ancShown = ancAll.filter(x => (f === 'all' || x.status === f) && (kf === 'all' || x.kind === kf));
   const all = [...figUs.flatMap(u => u.reviews).filter(r => !r.none), ...ancAll], nP = all.filter(r => r.status === 'pending').length;
   const kinds = [...new Set(ancAll.map(x => x.kind))];
   const pdf = c.v.pdf;
   return `${banner()}<div class="pagehead"><div><h1>AN review · ${c.label}</h1><p>${nP} pending · ${all.length - nP} resolved. These comments stay with ${c.label} even after newer versions are published.<br><span class="meta">AN PDF: ${pdf ? esc(pdf.name) + (pdf.file_id ? ' (stored in the repository: opens on any device)' : ' (kept on your computer only)') : 'not recorded yet'} — use <b>Open the AN PDF</b>.</span></p></div>
-    <div class="actions"><button class="btn" data-act="open-pdf" data-v="${c.id}">Open the AN PDF${pdf ? '' : ' …'}</button><button class="btn" data-act="import-email" data-type="note">Import comments from email</button><button class="btn" data-act="reply-doc">Reply document</button><button class="btn primary" data-act="add-anc">+ Add comment</button></div></div>
+    <div class="actions"><button class="btn" data-act="open-pdf" data-v="${c.id}">Open the AN PDF${pdf ? '' : ' …'}</button><button class="btn" data-act="import-email" data-type="note">Import comments from email</button><button class="btn" data-act="add-figure">+ Figure with several plots</button><button class="btn" data-act="reply-doc">Reply document</button><button class="btn primary" data-act="add-anc">+ Add comment</button></div></div>
     <div class="chips" style="margin-bottom:6px">${[['all', 'All'], ['pending', 'Pending'], ['resolved', 'Resolved']].map(([k, l]) => `<span class="chip ${f === k ? 'on' : ''}" data-act="rfilter" data-id="${k}">${l}</span>`).join('')}</div>
     <div class="sechead"><h2>Comments on figures <span class="count">${figShown.length}</span></h2></div>
-    ${usageList(figShown, 'No comments on figures yet. Figures appear here when a plot is recorded as an AN figure (open a plot → <b>+ Analysis Note</b>) and a comment is added to it.')}
+    ${figShown.length ? figGroups(figShown).map(figureCard).join('') : '<div class="card empty">No comments on figures yet. Figures appear here when a plot is recorded as an AN figure (open a plot → <b>+ Analysis Note</b>, or use <b>+ Figure with several plots</b>) and a comment is added to it.</div>'}
     <div class="sechead"><h2>Comments on text, tables and methodology <span class="count">${ancShown.length}</span></h2></div>
     ${kinds.length > 1 ? `<div class="chips" style="margin-bottom:10px">${['all', ...kinds].map(k => `<span class="chip ${kf === k ? 'on' : ''}" data-act="kfilter" data-id="${k}">${k === 'all' ? 'All kinds' : COMMENT_KINDS[k]}</span>`).join('')}</div>` : ''}
     ${ancShown.length ? ancShown.map(ancCard).join('') : '<div class="card empty">No comments of this kind yet. Use <b>Import comments from email</b> or <b>+ Add comment</b>.</div>'}`;
@@ -595,6 +618,31 @@ function viewPlot(id) {
   </div>`;
 }
 
+function reviewRow(u, r, opts = {}) {
+  const [cls, label] = stateOf(r.status, r.answer), figure = u.type === 'note';
+  const act = r.none ? `<button class="btn sm" data-act="edit-rv" data-id="${r.id}">Add comment</button>`
+    : r.status === 'pending' ? `<button class="btn sm primary" data-act="resolve" data-id="${r.id}">Mark resolved</button><button class="btn sm" data-act="edit-rv" data-id="${r.id}">Edit</button>`
+    : `<button class="btn sm" data-act="reopen" data-id="${r.id}">Reopen</button>`;
+  const vers = [r.resolvedVersionId, ...(r.resolvedMore || [])].map(id => id && ver(id)).filter(Boolean);
+  const target = opts.group ? `<span class="badge ${r.scope === 'figure' ? '' : 'stage'}">${r.scope === 'figure' ? 'Whole figure' : esc(panelName(u))}</span> ` : '';
+  const addMore = figure && opts.group && r.status === 'resolved' && !r.none ? `<br><button class="link" data-act="more-plot" data-id="${r.id}">＋ Updated plot for another panel</button>` : '';
+  return `<div class="rv"><div><div class="who">${target}${esc(whoStr(r))} <span class="meta">· ${fmtDate(r.created)}</span></div>
+    ${r.none ? '<div class="txt none">No comments so far</div>' : `<div class="txt">${esc(r.text)}</div>`}${r.none ? '' : anchorLine(r, 'rev')}</div>
+    <div class="ra">${r.none ? '' : `<span class="badge ${cls}">${label}</span>`}${act}<button class="iconbtn" data-act="del-rv" data-id="${r.id}" title="Delete">🗑</button></div>
+    ${r.none ? '' : `<div style="grid-column:1/-1">${ansBox('rev', r.id, r.answer)}</div>`}
+    ${r.status === 'resolved' && !r.none ? `<div class="res">${vers.length ? `Updated plot${vers.length > 1 ? 's' : ''} saved as ${vers.map(rv => `<a href="${L('/plot/' + rv.plotId)}" data-act="selver" data-id="${rv.id}"><b>${verLabel(rv)}</b></a> <span class="meta">${esc(plot(rv.plotId).name)}</span> ${ctxChip(rv.anvId)}`).join(', ')}<br><span class="mono">${vers.map(rv => esc(rv.fileName)).join(' · ')}</span><br>` : ''}${esc(r.resolution || '')}${addMore}</div>` : ''}</div>`;
+}
+/* a figure of the AN with all its plots (panels) and every comment about it */
+function figureCard(uses) {
+  const fig = uses[0].fig, rs = uses.flatMap(u => u.reviews.map(r => ({u, r}))), live = rs.filter(x => !x.r.none);
+  const pend = live.filter(x => x.r.status === 'pending').length, res = live.filter(x => x.r.status === 'resolved').length;
+  const panels = uses.map(u => { const v = ver(u.versionId), p = plot(v.plotId);
+    return `<div class="panel" data-go="${L('/plot/' + p.id)}" data-sel="${v.id}" data-ctx="${u.anvId || 'draft'}"><div class="pimg">${img(v)}</div><div class="pl"><b>${esc(u.panel || p.name)}</b><span>${u.panel ? esc(p.name) + ' · ' : ''}${verLabel(v)}</span></div></div>`; }).join('');
+  const status = !rs.length ? '<span class="badge">No comments yet</span>' : `${pend ? `<span class="badge pending">${pend} pending</span>` : ''}${res ? `<span class="badge resolved">${res} resolved</span>` : ''}`;
+  return `<div class="card ucard note"><div class="uh"><div><div class="ti">Analysis Note · Figure ${esc(fig)}</div><span class="meta">${uses.length} plot${uses.length === 1 ? '' : 's'}${uses[0].anVer ? ' · ' + esc(uses[0].anVer) : ''}</span></div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${status}<button class="btn sm" data-act="add-rv" data-id="${uses[0].id}">+ Convener comment</button></div></div>
+    <div class="panels">${panels}</div>${rs.map(x => reviewRow(x.u, x.r, {group: uses.length > 1})).join('')}</div>`;
+}
 function usageCard(u) {
   const rs = u.reviews, pend = rs.filter(r => !r.none && r.status === 'pending').length, res = rs.filter(r => !r.none && r.status === 'resolved').length, note = u.type === 'note';
   const locked = note && !u.anvId;          // AN review comments need a published AN version
@@ -603,17 +651,7 @@ function usageCard(u) {
     : `<span class="meta">${u.date ? fmtDay(u.date) + ' · ' : ''}${u.link ? `<a href="${esc(u.link)}" target="_blank" rel="noopener noreferrer">Open slides ↗</a>` : ''}</span>`;
   const status = locked ? '' : !rs.length ? '<span class="badge">No feedback recorded yet</span>'
     : `${pend ? `<span class="badge pending">${pend} pending</span>` : ''}${res ? `<span class="badge resolved">${res} resolved</span>` : ''}${!pend && !res ? '<span class="badge">No comments so far</span>' : ''}`;
-  const reviews = rs.map(r => {
-    const rv = r.resolvedVersionId ? ver(r.resolvedVersionId) : null, [cls, label] = stateOf(r.status, r.answer);
-    const act = r.none ? `<button class="btn sm" data-act="edit-rv" data-id="${r.id}">Add comment</button>`
-      : r.status === 'pending' ? `<button class="btn sm primary" data-act="resolve" data-id="${r.id}">Mark resolved</button><button class="btn sm" data-act="edit-rv" data-id="${r.id}">Edit</button>`
-      : `<button class="btn sm" data-act="reopen" data-id="${r.id}">Reopen</button>`;
-    return `<div class="rv"><div><div class="who">${esc(whoStr(r))} <span class="meta">· ${fmtDate(r.created)}</span></div>
-      ${r.none ? '<div class="txt none">No comments so far</div>' : `<div class="txt">${esc(r.text)}</div>`}${r.none ? '' : anchorLine(r, 'rev')}</div>
-      <div class="ra">${r.none ? '' : `<span class="badge ${cls}">${label}</span>`}${act}<button class="iconbtn" data-act="del-rv" data-id="${r.id}" title="Delete">🗑</button></div>
-      ${r.none ? '' : `<div style="grid-column:1/-1">${ansBox('rev', r.id, r.answer)}</div>`}
-      ${r.status === 'resolved' && !r.none ? `<div class="res">${rv ? `Updated plot saved as <a href="${L('/plot/' + rv.plotId)}" data-act="selver" data-id="${rv.id}"><b>${verLabel(rv)}</b></a> ${ctxChip(rv.anvId)} <span class="mono">${esc(rv.fileName)}</span><br>` : ''}${esc(r.resolution || '')}</div>` : ''}</div>`;
-  }).join('');
+  const reviews = rs.map(r => reviewRow(u, r, {group: u.type === 'note' && sameFigUses(u).length > 1})).join('');
   return `<div class="card ucard ${kindOf(u.type)}"><div class="uh"><div><div class="ti">${esc(useTitle(u))}</div>${detail}</div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${status}${locked ? '' : `<button class="btn sm" data-act="add-rv" data-id="${u.id}">+ ${note ? 'Convener' : 'Meeting'} comment</button>`}
     <button class="iconbtn" data-act="edit-use" data-id="${u.id}" title="Edit">✎</button>${u.anvId ? '' : `<button class="iconbtn" data-act="del-use" data-id="${u.id}" title="Remove">🗑</button>`}</div></div>
@@ -830,6 +868,7 @@ function useFields(type, u = {}) {
     const figs = [...new Set(S.usages.filter(x => x.type === 'note').map(x => x.fig))];
     return `<datalist id="figs">${figs.map(f => `<option value="${esc(f)}">`).join('')}</datalist>`
       + field('Figure number in the Analysis Note', `<input type="text" name="fig" list="figs" required maxlength="40" value="${esc(u.fig || '')}" placeholder="e.g. 4.2">`, 'Type a number or pick one used before.')
+      + field('Panel label', `<input type="text" name="panel" maxlength="60" value="${esc(u.panel || '')}" placeholder="e.g. UL2018">`, 'Only if this figure is made of several plots (for example one per era). Give each plot the same figure number and its own label.', true)
       + field('Analysis Note draft / version', `<input type="text" name="an_ver" maxlength="40" value="${esc(u.anVer || '')}" placeholder="e.g. v3">`, '', true);
   }
   return meetingFields(u);
@@ -839,7 +878,7 @@ function useModal(vid, type, u) {
   openModal({title: `${u ? 'Edit' : 'Add'} · ${note ? 'Analysis Note figure' : 'plot shown in a meeting'}`, wide: !note,
     sub: `${esc(p.name)} ${verLabel(v)}${note ? ` · recorded in ${u ? (u.anvId ? anvLabel(anv(u.anvId)) : 'the working draft') : (cx.draft ? 'the working draft' : cx.label)}` : ''}`, body: useFields(t, u || {}),
     onSubmit: async fd => {
-      const d = note ? {fig: fd.get('fig').trim(), an_ver: fd.get('an_ver').trim()} : {title: fd.get('title').trim(), link: fd.get('link').trim(), slide: fd.get('slide').trim(), date: fd.get('date')};
+      const d = note ? {fig: fd.get('fig').trim(), panel: fd.get('panel').trim(), an_ver: fd.get('an_ver').trim()} : {title: fd.get('title').trim(), link: fd.get('link').trim(), slide: fd.get('slide').trim(), date: fd.get('date')};
       await (u ? api('PATCH', aurl('/usages/' + u.id), d) : api('POST', aurl('/usages'), {plot_version_id: vid, type: t, an_version_id: note ? cx.id : null, ...d})); await reload();
     }});
 }
@@ -859,9 +898,10 @@ function meetingPlotModal() {
 }
 
 function reviewModal(u, r) {
-  const t = u.type, has = r && !r.none;
+  const t = u.type, has = r && !r.none, sibs = t === 'note' && !r ? sameFigUses(u) : [];
   openModal({title: r ? 'Edit feedback' : 'Add feedback', sub: esc(useTitle(u)), submit: 'Save',
-    body: `<div class="cols">${field(t === 'note' ? 'Kind of reviewer' : 'Who commented', `<select name="role">${CTX[t].roles.map(x => `<option ${r?.role === x ? 'selected' : ''}>${x}</option>`).join('')}</select>`)}
+    body: (sibs.length > 1 ? field('Which plot is it about?', `<select name="panel"><option value="figure">The whole figure (all panels)</option>${sibs.map(x => `<option value="${x.id}" ${x.id === u.id && false ? 'selected' : ''}>${esc(panelName(x))} — ${esc(plot(ver(x.versionId).plotId).name)} ${verLabel(ver(x.versionId))}</option>`).join('')}</select>`, 'Choose the era or panel the convener means. You can pick the plot to update when you resolve it.') : '')
+      + `<div class="cols">${field(t === 'note' ? 'Kind of reviewer' : 'Who commented', `<select name="role">${CTX[t].roles.map(x => `<option ${r?.role === x ? 'selected' : ''}>${x}</option>`).join('')}</select>`)}
       ${field('Name', `<input type="text" name="name" maxlength="100" value="${esc(r?.name || '')}" placeholder="${t === 'note' ? 'Reviewer' : 'Meeting member'} name">`, '', true)}</div>
       ${field('Feedback', radios('kind', [['none', 'No comments so far'], ['comment', 'There is a comment']], has ? 'comment' : 'none'))}
       <div class="f" id="cwrap" ${has ? '' : 'hidden'}><label class="l">What was the comment?</label><textarea name="text" maxlength="5000" placeholder="Paste or summarise the comment">${esc(has ? r.text : '')}</textarea></div>
@@ -873,34 +913,61 @@ function reviewModal(u, r) {
     onSubmit: async fd => {
       const none = fd.get('kind') === 'none', wantResolved = !none && fd.get('status') === 'resolved' && r?.status !== 'resolved';
       const body = {role: fd.get('role'), name: fd.get('name').trim(), none, text: none ? '' : fd.get('text').trim(), status: r?.status === 'resolved' && !none && !wantResolved ? (fd.get('status') === 'pending' ? 'pending' : 'resolved') : 'pending'};
-      let id = r?.id; if (r) await api('PATCH', aurl('/reviews/' + r.id), body); else id = (await api('POST', aurl(`/usages/${u.id}/reviews`), body)).id;
-      await reload(); if (wantResolved) setTimeout(() => resolveModal(S.usages.find(x => x.id === u.id), findReview(id).r), 50);
+      let target = u, id = r?.id;
+      if (sibs.length > 1) { const pick = fd.get('panel'); if (pick === 'figure') { target = sibs[0]; body.scope = 'figure'; } else { target = sibs.find(x => x.id === pick); body.scope = 'panel'; } }
+      if (r) await api('PATCH', aurl('/reviews/' + r.id), body); else id = (await api('POST', aurl(`/usages/${target.id}/reviews`), body)).id;
+      await reload(); if (wantResolved) setTimeout(() => { const f = findReview(id); resolveModal(f.u, f.r); }, 50);
     }});
 }
 function whoCode(r) { return r.name ? slug(r.name.replace(/\./g, ''), 10) : r.role.split(/\s+/).map(w => /\d/.test(w) ? w : w[0].toUpperCase()).join(''); }
-function resolveModal(u, r) {
-  const v = ver(u.versionId), p = plot(v.plotId), idx = u.reviews.filter(x => !x.none).indexOf(r) + 1;
-  const ctxPart = u.type === 'note' ? 'AN-Fig' + slug(u.fig, 8) : slug(meetingName(u), 10) + (u.slide ? '-s' + slug(u.slide, 6) : '');
-  const base = `${slug(p.name, 24)}_v${v.num}_${ctxPart}_${whoCode(r)}-c${idx}`;
-  const nextRev = Math.max(0, ...S.versions.filter(x => x.plotId === p.id && x.num === v.num).map(x => x.rev)) + 1;
-  openModal({title: 'Mark as resolved', wide: true, submit: 'Resolve', sub: `<b>${esc(whoStr(r))}</b>: “${esc(r.text)}”`,
-    body: `${radios('mode', [['plot', 'Upload the updated plot'], ['noplot', 'Resolved without changing the plot']], 'plot')}
-      <div id="rp" style="display:grid;gap:14px">${field('Updated plot', fileField(false))}
+function resolveModal(u, r, add) {
+  const figure = u.type === 'note', uses = figure ? sameFigUses(u) : [u], many = uses.length > 1, idx = u.reviews.filter(x => !x.none).indexOf(r) + 1;
+  const ctxPart = figure ? 'AN-Fig' + slug(u.fig, 8) : slug(meetingName(u), 10) + (u.slide ? '-s' + slug(u.slide, 6) : '');
+  const baseFor = use => { const v = ver(use.versionId), p = plot(v.plotId); return {v, p, base: `${slug(p.name, 24)}_v${v.num}_${ctxPart}_${whoCode(r)}-c${idx || 1}`, nextRev: Math.max(0, ...S.versions.filter(x => x.plotId === p.id && x.num === v.num).map(x => x.rev)) + 1}; };
+  const first = r.scope === 'panel' || !many ? uses.find(x => x.id === r.usage_id) || uses[0] : null, b0 = baseFor(first || uses[0]);
+  openModal({title: add ? 'Updated plot for another panel' : 'Mark as resolved', wide: true, submit: add ? 'Save updated plot' : 'Resolve', sub: `<b>${esc(whoStr(r))}</b>: “${esc(r.text)}”`,
+    body: (add ? '' : radios('mode', [['plot', 'Upload the updated plot'], ['noplot', 'Resolved without changing the plot']], 'plot'))
+      + `<div id="rp" style="display:grid;gap:14px">${many ? field('Which plot did you update?', `<select name="use" required><option value="">— choose the era / panel —</option>${uses.map(x => `<option value="${x.id}" ${first && x.id === first.id ? 'selected' : ''}>${esc(panelName(x))} — ${esc(plot(ver(x.versionId).plotId).name)} ${verLabel(ver(x.versionId))}</option>`).join('')}</select>`, r.scope === 'figure' ? 'This comment is about the whole figure, so pick the panel you are fixing. Use “Updated plot for another panel” afterwards to fix more.' : '') : ''}
+        ${field('Updated plot', fileField(false))}
         ${field('What did you change to address it?', '<textarea name="changes" maxlength="3000" placeholder="e.g. Switched y-axis to log scale and extended range to 10⁶."></textarea>')}
-        ${field('Saved as', `<input type="text" name="fname" maxlength="140" value="${esc(base)}_" class="mono">`, `Stored as <b>${verLabel({num: v.num, rev: nextRev})}</b>, linked to ${verLabel(v)}, in the working draft. Finish the name with a few words describing the change, e.g. <span class="mono">${esc(base)}_log-y-axis</span>.`)}</div>
+        ${field('Saved as', `<input type="text" name="fname" maxlength="140" value="${esc(b0.base)}_" class="mono">`, `<span id="fhint">Stored as <b>${verLabel({num: b0.v.num, rev: b0.nextRev})}</b>, linked to ${verLabel(b0.v)}, in the working draft.</span> Finish the name with a few words describing the change, e.g. <span class="mono">log-y-axis</span>.`)}</div>
       <div id="rn" hidden>${field('How was it resolved?', '<textarea name="note" maxlength="3000" placeholder="e.g. Explained in reply; reviewer accepted the current binning."></textarea>')}</div>`,
     setup: f => {
-      const upd = () => { const pl = f.mode.value === 'plot'; $('#rp', f).hidden = !pl; $('#rn', f).hidden = pl; f.file.required = pl; f.changes.required = pl; f.note.required = !pl; };
-      f.querySelectorAll('[name=mode]').forEach(x => x.addEventListener('change', upd)); upd();
+      const upd = () => { const pl = add || f.mode.value === 'plot'; $('#rp', f).hidden = !pl; $('#rn', f).hidden = pl; f.file.required = pl; f.changes.required = pl; f.note.required = !pl; if (f.use) f.use.required = pl; };
+      if (!add) f.querySelectorAll('[name=mode]').forEach(x => x.addEventListener('change', upd)); upd();
+      if (f.use) f.use.addEventListener('change', () => { const use = uses.find(x => x.id === f.use.value); if (!use) return; const b = baseFor(use); f.fname.value = b.base + '_'; $('#fhint', f).innerHTML = `Stored as <b>${verLabel({num: b.v.num, rev: b.nextRev})}</b>, linked to ${verLabel(b.v)}, in the working draft.`; });
     },
     onSubmit: async fd => {
-      if (fd.get('mode') === 'plot') {
+      if (add || fd.get('mode') === 'plot') {
         const file = fd.get('file'); if (!file || !file.size) throw new Error('Please choose the updated plot');
         const up = await upload(file);
-        await api('POST', aurl(`/reviews/${r.id}/resolve`), {mode: 'plot', file_id: up.file_id, changes: fd.get('changes').trim(), file_name: fd.get('fname').trim().replace(/[-_.]+$/, '')});
-        toast('Resolved — updated plot saved in the working draft');
+        await api('POST', aurl(`/reviews/${r.id}/resolve`), {mode: 'plot', add: !!add, usage_id: fd.get('use') || undefined, file_id: up.file_id, changes: fd.get('changes').trim(), file_name: fd.get('fname').trim().replace(/[-_.]+$/, '')});
+        toast('Updated plot saved in the working draft');
       } else { await api('POST', aurl(`/reviews/${r.id}/resolve`), {mode: 'noplot', note: fd.get('note').trim()}); toast('Marked as resolved'); }
       await reload();
+    }});
+}
+
+/* ---- add an AN figure that is made of several plots (e.g. one per era) in one go ---- */
+function figureBuilderModal() {
+  const cx = ctx(), plots = visPlots(); if (!plots.length) { toast('Add the plots first (+ New plot).', 'err'); return; }
+  const opts = `<option value="">— none —</option>${plots.map(p => `<option value="${p.id}">${esc(cat(p.catId)?.name || '')} — ${esc(p.name)} (${verLabel(latest(p.id))})</option>`).join('')}`;
+  const row = i => `<div class="cols fbrow"><div class="f"><select name="p${i}" data-i="${i}">${opts}</select></div><div class="f"><input type="text" name="l${i}" maxlength="60" placeholder="Panel label, e.g. UL2018"></div></div>`;
+  openModal({title: 'Add a figure made of several plots', wide: true, submit: 'Add figure',
+    sub: 'For example Figure 3 with one plot per era. Pick each plot and label its panel. Comments can then point at one era, and the fix goes straight to that plot.',
+    body: field('Figure number in the Analysis Note', '<input type="text" name="fig" required maxlength="40" placeholder="e.g. 3">') + `<div class="l" style="font-weight:600;font-size:13px">Plots in this figure <span class="meta">(leave unused rows as “none”)</span></div><div id="fbrows">${[0, 1, 2, 3].map(row).join('')}</div><button type="button" class="btn sm" id="fbadd">+ Another plot</button>`,
+    setup: f => {
+      let n = 4;
+      f.addEventListener('change', e => { const s = e.target; if (s.matches('select[data-i]')) { const l = f['l' + s.dataset.i]; const p = plot(s.value); if (p && !l.value) l.value = eraLabelOf(p.name); } });
+      $('#fbadd', f).onclick = () => { $('#fbrows', f).insertAdjacentHTML('beforeend', row(n++)); };
+    },
+    onSubmit: async (fd, f) => {
+      const rows = []; for (let i = 0; fd.has('p' + i); i++) if (fd.get('p' + i)) rows.push({pid: fd.get('p' + i), label: fd.get('l' + i).trim()});
+      if (!rows.length) throw new Error('Choose at least one plot.');
+      if (rows.length > 1 && rows.some(r => !r.label)) throw new Error('Give every plot a panel label (for example its era).');
+      const fig = fd.get('fig').trim();
+      await batch(async () => { for (const r of rows) await api('POST', aurl('/usages'), {plot_version_id: latest(r.pid).id, type: 'note', an_version_id: cx.id, fig, panel: r.label, an_ver: ''}); });
+      await reload(); toast(`Figure ${fig} added with ${rows.length} plot${rows.length === 1 ? '' : 's'}.`);
     }});
 }
 
@@ -933,7 +1000,7 @@ function replyModal() {
   const q = (label, who, text, ans, extra) => `${label}${who ? ' (' + who + ')' : ''}:\n${text}\n→ ${ans && ans.trim() ? ans.trim() : '[no answer written yet]'}${extra ? '\n  (' + extra + ')' : ''}`;
   const parts = [];
   S.anc.filter(x => x.source === 'an' && x.anvId === c.id).forEach(x => parts.push(q((x.location || COMMENT_KINDS[x.kind] || 'Comment'), x.name, x.text, x.answer, x.status === 'resolved' && x.resolvedIn && anv(x.resolvedIn) ? 'addressed in ' + anvLabel(anv(x.resolvedIn)) : '')));
-  figs.forEach(u => u.reviews.filter(r => !r.none).forEach(r => { const rv = r.resolvedVersionId ? ver(r.resolvedVersionId) : null; parts.push(q('Fig ' + u.fig, r.name, r.text, r.answer, rv ? 'updated plot: ' + rv.fileName : '')); }));
+  figs.forEach(u => u.reviews.filter(r => !r.none).forEach(r => { const vs = [r.resolvedVersionId, ...(r.resolvedMore || [])].map(id => id && ver(id)).filter(Boolean); parts.push(q('Fig ' + u.fig + (r.scope === 'figure' ? '' : u.panel ? ' (' + u.panel + ')' : ''), r.name, r.text, r.answer, vs.length ? 'updated plot' + (vs.length > 1 ? 's' : '') + ': ' + vs.map(v => v.fileName).join(', ') : '')); }));
   const text = `Reply to the comments on ${S.an.an_name || S.an.title} ${anvLabel(c.v)}\n\n` + parts.map((t, i) => `${i + 1}. ${t}`).join('\n\n');
   openModal({title: 'Reply document', xl: true, submit: 'Copy to clipboard', sub: `${parts.length} comment${parts.length === 1 ? '' : 's'} with your answers. Edit freely, then copy it into your email.`,
     body: `<textarea id="replytxt" style="width:100%;min-height:380px;font:13.5px/1.5 ui-monospace,monospace;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg)">${esc(text)}</textarea>`,
@@ -948,11 +1015,19 @@ function importModal(mode) {
   // figures: those of the version being viewed. meetings: every plot record of any meeting, newest first
   const targets = isNote ? cNotes().sort((a, b) => key(a) - key(b)) : meetingUses().sort((a, b) => (b.date || '').localeCompare(a.date || '') || b.created - a.created);
   const roles = CTX[isNote ? 'note' : 'meeting'].roles;
-  const tgtLabel = u => { const v = ver(u.versionId); return isNote ? `Fig ${u.fig} — ${plot(v.plotId).name} ${verLabel(v)}`
+  const figGrp = fig => targets.filter(x => x.fig === fig);
+  const tgtLabel = u => { const v = ver(u.versionId); return isNote ? `Fig ${u.fig}${u.panel ? ' · ' + u.panel : ''} — ${plot(v.plotId).name} ${verLabel(v)}`
     : `slide ${u.slide || '?'} · ${meetingName(u)} ${fmtDay(u.date)} — ${plot(v.plotId).name} ${verLabel(v)}`; };
   const normFig = s => String(s).toLowerCase().replace(/^fig(ure)?\.?\s*/, '').trim();
   const guess = it => {
-    if (isNote) { if (it.figs.length === 1) { const u = targets.find(x => normFig(x.fig) === it.figs[0]); if (u) return u.id; } return 'an'; }
+    if (isNote) {
+      if (it.figs.length === 1) {
+        const g = targets.filter(x => normFig(x.fig) === it.figs[0]);
+        if (g.length === 1) return g[0].id;
+        if (g.length > 1) { const hit = g.filter(x => panelMatches(x.panel, it.raw)); return hit.length === 1 ? hit[0].id : g[0].id + '|figure'; }   // the era named in the comment picks the panel
+      }
+      return 'an';
+    }
     if (it.slides.length === 1) {
       const mn = ($('#imeet')?.value || '').trim().toLowerCase(), hit = targets.filter(x => String(x.slide).trim() === it.slides[0]);
       const u = hit.find(x => mn && meetingName(x).toLowerCase() === mn) || hit[0]; if (u) return u.id;
@@ -961,7 +1036,8 @@ function importModal(mode) {
   };
   let rows = [], ignored = [];
   const opt = (v, l, cur) => `<option value="${v}" ${v === cur ? 'selected' : ''}>${esc(l)}</option>`;
-  const tgtOpts = cur => opt(isNote ? 'an' : 'text', isNote ? 'Text / table / methodology (not a plot)' : 'Methodology / general (not a plot)', cur) + targets.map(u => opt(u.id, tgtLabel(u), cur)).join('');
+  const tgtOpts = cur => opt(isNote ? 'an' : 'text', isNote ? 'Text / table / methodology (not a plot)' : 'Methodology / general (not a plot)', cur)
+    + (isNote ? figGroups(targets).map(g => (g.length > 1 ? opt(g[0].id + '|figure', `Fig ${g[0].fig} — whole figure (${g.length} panels)`, cur) : '') + g.map(u => opt(u.id, tgtLabel(u), cur)).join('')).join('') : targets.map(u => opt(u.id, tgtLabel(u), cur)).join(''));
   openModal({title: isNote ? `Import comments from the convenors · ${cx.label}` : 'Import comments from a meeting', xl: true, submit: 'Import ticked comments',
     sub: 'Paste the whole email. The text is split into separate comments here in your browser; nothing is saved until you click Import.',
     body: (isNote ? '' : `<datalist id="mnames">${meetingNames().map(n => `<option value="${esc(n)}">`).join('')}</datalist><div class="cols">${field('Meeting name', '<input type="text" name="meeting" id="imeet" list="mnames" required maxlength="100" placeholder="e.g. TMP, Top group meeting">')}${field('Meeting date', `<input type="date" name="meeting_date" value="${today()}">`)}</div>`)
@@ -1076,6 +1152,8 @@ const A = {
   'edit-rv': el => { const f = findReview(el.dataset.id); reviewModal(f.u, f.r); },
   'del-rv': el => confirmBox('Delete feedback', 'Delete this feedback entry?', 'Delete', async () => { await api('DELETE', aurl('/reviews/' + el.dataset.id)); await reload(); }),
   resolve: el => { const f = findReview(el.dataset.id); resolveModal(f.u, f.r); },
+  'more-plot': el => { const f = findReview(el.dataset.id); resolveModal(f.u, f.r, true); },
+  'add-figure': () => figureBuilderModal(),
   reopen: async el => { const f = findReview(el.dataset.id); try { await api('PATCH', aurl('/reviews/' + f.r.id), {role: f.r.role, name: f.r.name, none: false, text: f.r.text, status: 'pending'}); await reload(); } catch (e) { toast(e.message, 'err'); } },
   'new-doc': () => docModal(), 'edit-doc': el => docModal(S.docs.find(d => d.id === el.dataset.id)),
   'del-doc': el => confirmBox('Delete document', 'Delete this document record?', 'Delete', async () => { await api('DELETE', aurl('/documents/' + el.dataset.id)); await reload(); }),

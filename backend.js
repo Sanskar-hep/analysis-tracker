@@ -1,3 +1,4 @@
+/*! Analysis-Tracker - Copyright (c) 2026 Sanskar Nanda - MIT License (see LICENSE). https://github.com/Sanskar-hep */
 /* Analysis-Tracker storage layer for GitHub.
  *
  * There is no server. Data lives in a (private) GitHub repository:
@@ -90,7 +91,7 @@ async function getState(aid, head) {
 function migrate(st) {                                    // older files get the newer fields
   st.an_comments = st.an_comments || [];
   st.an_comments.forEach(c => { c.source = c.source || 'an'; c.kind = c.kind || 'text'; c.answer = c.answer || ''; c.meeting = c.meeting || ''; c.meeting_date = c.meeting_date || ''; if (c.anchor === undefined) c.anchor = null; });
-  st.usages.forEach(u => u.reviews.forEach(r => { r.answer = r.answer || ''; if (r.anchor === undefined) r.anchor = null; }));
+  st.usages.forEach(u => { u.panel = u.panel || ''; u.reviews.forEach(r => { r.answer = r.answer || ''; if (r.anchor === undefined) r.anchor = null; r.scope = r.scope || 'panel'; r.resolved_more = r.resolved_more || []; }); });
   st.an_versions.forEach(v => { if (v.pdf === undefined) v.pdf = null; });
   if (st.analysis && st.analysis.presented === undefined) st.analysis.presented = false;
   return st;
@@ -359,12 +360,12 @@ const H = {
     let carried = 0;
     if (b.carry_figures && prev) {
       const notesOf = id => st.usages.filter(u => u.an_version_id === id && u.type === 'note');
-      const have = new Set(notesOf(vid).map(u => u.fig)), numOf = id => st.an_versions.find(v => v.id === id).number;
+      const keyOf = u => u.fig + '|' + (u.panel || ''), have = new Set(notesOf(vid).map(keyOf)), numOf = id => st.an_versions.find(v => v.id === id).number;
       for (const u of notesOf(prev.id)) {
-        if (have.has(u.fig)) continue;
+        if (have.has(keyOf(u))) continue;
         const pv = st.plot_versions.find(x => x.id === u.plot_version_id);
         const lat = st.plot_versions.filter(x => x.plot_id === pv.plot_id && x.an_version_id && numOf(x.an_version_id) <= num).sort((x, y) => y.num - x.num || y.rev - x.rev)[0];
-        st.usages.push({id: nid(), analysis_id: a.id, plot_version_id: lat.id, an_version_id: vid, type: 'note', fig: u.fig, an_ver: 'v' + num, link: '', slide: '', date: '', title: '', created: now(), reviews: []}); carried++;
+        st.usages.push({id: nid(), analysis_id: a.id, plot_version_id: lat.id, an_version_id: vid, type: 'note', fig: u.fig, panel: u.panel || '', an_ver: 'v' + num, link: '', slide: '', date: '', title: '', created: now(), reviews: []}); carried++;
       }
     }
     a.an_status = 'published';
@@ -456,7 +457,7 @@ const H = {
   createReview: ({aid, uid}, b) => tx(aid, st => {
     const u = byId(st.usages, uid, 'Record');
     if (u.type === 'note' && !u.an_version_id) throw E(400, 'Reviewer comments can only be recorded against a published AN version');
-    const {f} = reviewFields(b), r = {id: nid(), analysis_id: st.analysis.id, usage_id: u.id, ...f, answer: '', anchor: null, status: 'pending', resolved_version_id: null, resolution: '', resolved_at: null, created: now()};
+    const {f} = reviewFields(b), r = {id: nid(), analysis_id: st.analysis.id, usage_id: u.id, ...f, scope: b.scope === 'figure' ? 'figure' : 'panel', resolved_more: [], answer: '', anchor: null, status: 'pending', resolved_version_id: null, resolution: '', resolved_at: null, created: now()};
     u.reviews.push(r); return {id: r.id};
   }, {message: 'Add feedback'}),
   updateReview: ({aid, id}, b) => tx(aid, st => {
@@ -471,12 +472,18 @@ const H = {
   }, {message: 'Delete feedback'}),
   resolveReview: ({aid, id}, b) => tx(aid, (st, io) => {
     const rv = findReview(st, id); if (rv.none) throw E(400, 'There is no comment to resolve');
-    const u = st.usages.find(x => x.id === rv.usage_id), mode = sv(b, 'mode', 10, true);
+    const own = st.usages.find(x => x.id === rv.usage_id), mode = sv(b, 'mode', 10, true), more = !!b.add;
+    if (more && rv.status !== 'resolved') throw E(400, 'Resolve the comment first');
     if (mode === 'plot') {
-      const base = byId(st.plot_versions, u.plot_version_id, 'Plot version'), changes = sv(b, 'changes', 3000, true);
+      // which plot was updated: the panel chosen by the user (must belong to the same figure), else the plot the comment is under
+      const target = b.usage_id ? byId(st.usages, b.usage_id, 'Record') : own;
+      if (own.type === 'note' && (target.type !== 'note' || target.fig !== own.fig || (target.an_version_id || null) !== (own.an_version_id || null))) throw E(400, 'That plot is not part of this figure');
+      if (own.type !== 'note' && target.id !== own.id) throw E(400, 'Invalid plot');
+      const base = byId(st.plot_versions, target.plot_version_id, 'Plot version'), changes = sv(b, 'changes', 3000, true);
       const vid = makeVersion(st, io, base.plot_id, {file_id: b.file_id, summary: (base.summary + ' - revised after review').slice(0, 140), changes,
         motivation: `Response to ${rv.role}${rv.name ? ' · ' + rv.name : ''}: ${rv.text}`.slice(0, 3000), dataset: base.dataset, code: base.code}, base, rv.id, sv(b, 'file_name', 150) || null);
-      Object.assign(rv, {status: 'resolved', resolved_version_id: vid, resolution: changes, resolved_at: now()});
+      if (more) { rv.resolved_more.push(vid); rv.resolution = (rv.resolution + '\n' + changes).trim(); }
+      else Object.assign(rv, {status: 'resolved', resolved_version_id: vid, resolution: changes, resolved_at: now()});
     } else if (mode === 'noplot') Object.assign(rv, {status: 'resolved', resolved_version_id: null, resolution: sv(b, 'note', 3000, true), resolved_at: now()});
     else throw E(400, 'Invalid mode');
     return {ok: true};
@@ -515,9 +522,9 @@ const H = {
         st.an_comments.push({id: nid(), analysis_id: st.analysis.id, source: mode, an_version_id: mode === 'an' ? ver.id : null, meeting, meeting_date: mdate, kind, role, name, location: loc, text, answer: '', anchor: null,
           status: 'pending', resolution: '', resolved_in: null, resolved_at: null, created: now()}); nAn++;
       } else {
-        const u = byId(st.usages, target, 'Record');
+        const wholeFig = target.endsWith('|figure'), u = byId(st.usages, wholeFig ? target.slice(0, -7) : target, 'Record');
         if (u.type === 'note' && (!u.an_version_id || (ver && u.an_version_id !== ver.id))) throw E(400, 'A figure belongs to a different AN version');
-        u.reviews.push({id: nid(), analysis_id: st.analysis.id, usage_id: u.id, role, name, none: false, text: loc && !/^fig/i.test(loc) ? `${loc}: ${text}` : text, answer: '', anchor: null,
+        u.reviews.push({id: nid(), analysis_id: st.analysis.id, usage_id: u.id, role, name, none: false, text: loc && !/^fig/i.test(loc) ? `${loc}: ${text}` : text, answer: '', anchor: null, scope: wholeFig ? 'figure' : 'panel', resolved_more: [],
           status: 'pending', resolved_version_id: null, resolution: '', resolved_at: null, created: now()}); nRev++;
       }
     }
@@ -560,8 +567,8 @@ function anchorOk(a) {
   return {page: a.page, kind: a.kind, rects, quote: sv(a, 'quote', 600)};
 }
 function usageFields(b, typ) {
-  if (typ === 'note') return {fig: sv(b, 'fig', 40, true), an_ver: sv(b, 'an_ver', 40), link: '', slide: '', date: '', title: ''};
-  return {fig: '', an_ver: '', link: urlOk(sv(b, 'link', 500), 'link'), slide: sv(b, 'slide', 40), date: dateOk(sv(b, 'date', 10, true), 'date'), title: sv(b, 'title', 150, typ === 'meeting')};
+  if (typ === 'note') return {fig: sv(b, 'fig', 40, true), panel: sv(b, 'panel', 60), an_ver: sv(b, 'an_ver', 40), link: '', slide: '', date: '', title: ''};
+  return {fig: '', panel: '', an_ver: '', link: urlOk(sv(b, 'link', 500), 'link'), slide: sv(b, 'slide', 40), date: dateOk(sv(b, 'date', 10, true), 'date'), title: sv(b, 'title', 150, typ === 'meeting')};
 }
 function reviewFields(b) {
   const none = !!b.none, text = sv(b, 'text', 5000, !none), s = sv(b, 'status', 10, false, 'pending') || 'pending';
@@ -599,7 +606,7 @@ function purgeUsage(st, uid) {
 }
 function purgeVersions(st, io, ids) {
   const aid = st.analysis.id, gone = new Set(ids);
-  st.usages.forEach(u => u.reviews.forEach(r => { if (gone.has(r.resolved_version_id)) Object.assign(r, {resolved_version_id: null, status: 'pending', resolution: ''}); }));
+  st.usages.forEach(u => u.reviews.forEach(r => { r.resolved_more = (r.resolved_more || []).filter(x => !gone.has(x)); if (gone.has(r.resolved_version_id)) Object.assign(r, {resolved_version_id: null, status: 'pending', resolution: ''}); }));
   st.usages.filter(u => gone.has(u.plot_version_id)).forEach(u => purgeUsage(st, u.id));
   for (const id of ids) {
     const v = st.plot_versions.find(x => x.id === id), f = st.files.find(x => x.id === v.file_id);

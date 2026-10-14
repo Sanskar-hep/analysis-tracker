@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "Analysis-Tracker"
+type: software
+abstract: "A web tool for tracking an analysis: plots and their versions, comments from meetings and convenors, and published analysis-note versions, stored in the user's own private GitHub repository."
+authors:
+  - family-names: "Nanda"
+    given-names: "Sanskar"
+version: "1.0.0"
+date-released: "2026-10-15"
+license: MIT
+repository-code: "https://github.com/Sanskar-hep/analysis-tracker"
+url: "https://sanskar-hep.github.io/analysis-tracker/"
+keywords:
+  - analysis tracking
+  - high-energy physics
+  - plots
+  - review comments
