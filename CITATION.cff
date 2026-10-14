@@ -8,6 +8,7 @@ authors:
     given-names: "Sanskar"
 version: "1.0.0"
 date-released: "2026-10-15"
+doi: 10.5281/zenodo.23377664
 license: MIT
 repository-code: "https://github.com/Sanskar-hep/analysis-tracker"
 url: "https://sanskar-hep.github.io/analysis-tracker/"

@@ -1,3 +1,4 @@
+/*! Analysis-Tracker - Copyright (c) 2026 Sanskar Nanda - MIT License (see LICENSE). https://github.com/Sanskar-hep */
 /* Splits a pasted e-mail into separate review comments. Pure text rules: no network, nothing leaves the browser. */
 (function (root) {
   'use strict';

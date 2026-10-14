@@ -1,5 +1,8 @@
 # Analysis-Tracker (GitHub edition)
 
+[![DOI](https://zenodo.org/badge/1418792901.svg)](https://doi.org/10.5281/zenodo.23377664)
+
+
 A static website (GitHub Pages) that stores all data in a **private GitHub repository**. No server, no database.
 
     Site repo  (public, holds only this code)   ->  GitHub Pages  ->  https://<owner>.github.io/<site-repo>/
@@ -98,3 +101,7 @@ Analysis-Tracker is designed and built by **Sanskar Nanda** (https://github.com/
 MIT License (see `LICENSE`). You may use and modify it, but you must keep the copyright and licence notice, and
 the "Designed & built by" credit in the footer should stay. The bundled PDF.js (`vendor/pdfjs/`) is Apache-2.0
 (c) Mozilla and keeps its own licence.
+
+## How to cite
+Nanda, S. (2026). *Analysis-Tracker* (v1.0.0) [Software]. Zenodo. https://doi.org/10.5281/zenodo.23377665 
+(DOI of all versions: https://doi.org/10.5281/zenodo.23377664)
