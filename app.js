@@ -167,8 +167,9 @@ function showConnect(msg = '') {
     <div class="hint">Your analyses are stored in a private GitHub repository. Sign in with a personal access token; GitHub decides who can read and write.</div>
     ${savedRepos().length ? `<div style="margin-top:16px"><div class="l" style="font-weight:600;font-size:13px;margin-bottom:6px">Saved repositories</div><div class="chips">${savedRepos().map(r => `<span class="chip" data-saved="${esc(r)}">${esc(r)}</span>`).join('')}</div></div>` : ''}
     <form id="authform" novalidate>
-      ${field('Data repository', `<input type="text" name="repo" required value="${esc(cfgRepo)}" placeholder="owner/analysis-tracker-data" autocomplete="off" spellcheck="false">`, 'The private repository that holds the data.')}
-      ${field('GitHub access token', '<input type="password" name="token" required autocomplete="off" placeholder="github_pat_…">', 'Fine-grained token with <b>Contents: Read and write</b> on that repository only.')}
+      ${field('Data repository', `<input type="text" name="repo" required value="${esc(cfgRepo)}" placeholder="owner/analysis-tracker-data" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">`, 'The private repository that holds the data.')}
+      ${field('GitHub access token', '<input type="password" name="token" id="tokinput" required autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="github_pat_…">', 'Not your GitHub password: the long token starting with <b>github_pat_</b> (Contents: Read and write on that repository only).')}
+      <label style="display:flex;gap:8px;align-items:center;font-size:13.5px"><input type="checkbox" id="showtok"> Show the token, to check what I typed or pasted</label>
       <label style="display:flex;gap:8px;align-items:center;font-size:13.5px"><input type="checkbox" name="remember" checked> Keep me connected on this device</label>
       <div class="autherr" id="autherr">${esc(msg)}</div>
       <button class="btn primary">Connect</button>
@@ -182,6 +183,7 @@ function showConnect(msg = '') {
       </ol></details>
   </div></div>`;
   const f = $('#authform');
+  $('#showtok').onchange = e => { $('#tokinput').type = e.target.checked ? 'text' : 'password'; };
   document.querySelectorAll('[data-saved]').forEach(c => c.onclick = async () => {
     $('#autherr').textContent = 'Connecting…';
     try { U = await ghSwitch(c.dataset.saved); await start(); } catch (ex) { showConnect(ex.message); }
@@ -325,7 +327,7 @@ function anFields(cur = {}, forceWritten = false) {
     + (forceWritten ? '' : field('AN status', radios('an_status', [['being_written', 'AN being written'], ['published', 'Version published']], cur.an_status || 'being_written')));
 }
 /* AN PDFs stay on the user's computer: only name, size and a SHA-256 fingerprint are saved, to check later that the right file is opened */
-const pdfField = hint => field('AN PDF', '<input type="file" name="pdf" accept="application/pdf,.pdf">', hint || 'Optional. The PDF stays on your computer: the tracker saves only its name, size and a fingerprint, so it can check you open the right file later.', true);
+const pdfField = hint => field('AN PDF', '<input type="file" name="pdf" accept="application/pdf,.pdf">', hint || '<b>Nothing is uploaded or displayed here.</b> The PDF stays on your computer. The tracker saves only its name, size and a fingerprint. To read it and highlight comments, open <b>AN review → Open the AN PDF</b> and choose the same file.', true);
 async function pdfFingerprint(file) {
   if (!file || !file.size) return null;
   const h = new Uint8Array(await crypto.subtle.digest('SHA-256', await file.arrayBuffer()));
@@ -340,6 +342,7 @@ function bindAnStage(f, optional) {   // show the version fields only when "Vers
   };
   f.querySelectorAll('[name=stage],[name=an_status]').forEach(x => x.addEventListener('change', upd)); upd();
 }
+const pdfToast = fd => { const f = fd.get('pdf'); if (f && f.size) toast(`PDF recorded: ${f.name}. It stays on your computer: open it from AN review → Open the AN PDF.`, '', 8000); };
 async function anStageBody(fd) {
   const b = {an_name: fd.get('an_name').trim(), collaboration: fd.get('collaboration').trim(), an_status: fd.get('an_status')};
   if (b.an_status === 'published') {
@@ -357,7 +360,7 @@ function newAnalysisModal() {
     onSubmit: async fd => {
       const body = {title: fd.get('title').trim(), stage: fd.get('stage')};
       if (body.stage === 'an_stage') Object.assign(body, await anStageBody(fd));
-      const r = await api('POST', '/analyses', body); go('#/a/' + r.id);
+      const r = await api('POST', '/analyses', body); go('#/a/' + r.id); pdfToast(fd);
     }});
 }
 
@@ -415,7 +418,7 @@ function viewDash() {
     const p = plot(v.plotId);
     return `<div class="row" data-go="${L('/plot/' + p.id)}" data-sel="${v.id}">${img(v)}<div class="t"><b>${esc(p.name)} <span class="badge">${verLabel(v)}</span></b><span>${esc(v.summary)}</span></div><span class="meta">${fmtDate(v.created)}</span></div>`;
   }).join('');
-  const anTile = isAN() ? `<div class="card tile"><b style="font-size:18px;line-height:1.4">${esc(S.an.an_name)}</b><span>${esc(S.an.collaboration)} · ${isPub() ? `AN v${latestAnv().number} published` : 'AN being written'}</span></div>` : '';
+  const anTile = isAN() ? `<div class="card tile"><b style="font-size:18px;line-height:1.4">${esc(S.an.an_name)}</b><span>${esc(S.an.collaboration)} · ${isPub() ? `AN v${latestAnv().number} published` : 'AN being written'}</span>${isPub() ? `<br><button class="link" data-act="open-pdf" data-v="${latestAnv().id}">Open the AN PDF${latestAnv().pdf ? '' : ' …'}</button>` : ''}</div>` : '';
   const showComments = meetingsOn() || isPub();
   return `${banner()}<div class="pagehead"><div><h1>${esc(S.an.title)}</h1><p>${ctx().draft ? 'Working draft' : ctx().label} · your plots${showComments ? ' and what was said about them' : ''}.</p></div>
     <div class="actions"><button class="btn primary" data-act="new-plot">+ New plot</button></div></div>
@@ -503,7 +506,7 @@ function viewReviewer() {
   const all = [...figUs.flatMap(u => u.reviews).filter(r => !r.none), ...ancAll], nP = all.filter(r => r.status === 'pending').length;
   const kinds = [...new Set(ancAll.map(x => x.kind))];
   const pdf = c.v.pdf;
-  return `${banner()}<div class="pagehead"><div><h1>AN review · ${c.label}</h1><p>${nP} pending · ${all.length - nP} resolved. These comments stay with ${c.label} even after newer versions are published.</p></div>
+  return `${banner()}<div class="pagehead"><div><h1>AN review · ${c.label}</h1><p>${nP} pending · ${all.length - nP} resolved. These comments stay with ${c.label} even after newer versions are published.<br><span class="meta">AN PDF: ${pdf ? esc(pdf.name) + ' (stays on your computer)' : 'not recorded yet'} — use <b>Open the AN PDF</b>.</span></p></div>
     <div class="actions"><button class="btn" data-act="open-pdf" data-v="${c.id}">Open the AN PDF${pdf ? '' : ' …'}</button><button class="btn" data-act="import-email" data-type="note">Import comments from email</button><button class="btn" data-act="reply-doc">Reply document</button><button class="btn primary" data-act="add-anc">+ Add comment</button></div></div>
     <div class="chips" style="margin-bottom:6px">${[['all', 'All'], ['pending', 'Pending'], ['resolved', 'Resolved']].map(([k, l]) => `<span class="chip ${f === k ? 'on' : ''}" data-act="rfilter" data-id="${k}">${l}</span>`).join('')}</div>
     <div class="sechead"><h2>Comments on figures <span class="count">${figShown.length}</span></h2></div>
@@ -662,13 +665,13 @@ function publishModal(editV) {
     onSubmit: async fd => {
       const n = parseInt(fd.get('number'), 10); if (!(n >= 1)) throw new Error('Version number must be a positive whole number');
       const r = await api('POST', aurl('/versions'), {number: n, published_on: fd.get('published_on') || today(), notes: fd.get('notes').trim(), carry_figures: !!fd.get('carry'), pdf: await pdfFingerprint(fd.get('pdf'))});
-      await loadAnalysis(S.an.id); setCtx(r.id); toast(`AN v${r.number} published${r.carried ? ` — ${r.carried} figure(s) carried over` : ''}`); go(L('')); render();
+      await loadAnalysis(S.an.id); setCtx(r.id); toast(`AN v${r.number} published${r.carried ? ` — ${r.carried} figure(s) carried over` : ''}`); go(L('')); render(); pdfToast(fd);
     }});
 }
 function editAnvModal(v) {
   openModal({title: `Edit AN v${v.number}`, body: field('Publication date', `<input type="date" name="published_on" value="${esc(v.published_on)}">`) + field('Notes', `<textarea name="notes">${esc(v.notes)}</textarea>`, '', true)
       + pdfField(v.pdf ? `Recorded: ${esc(v.pdf.name)} (${(v.pdf.size / 1048576).toFixed(1)} MB). Choose a file only to replace it.` : undefined),
-    onSubmit: async fd => { const b = {published_on: fd.get('published_on'), notes: fd.get('notes')}; const p = await pdfFingerprint(fd.get('pdf')); if (p) b.pdf = p; await api('PATCH', aurl('/versions/' + v.id), b); await reload(); }});
+    onSubmit: async fd => { const b = {published_on: fd.get('published_on'), notes: fd.get('notes')}; const p = await pdfFingerprint(fd.get('pdf')); if (p) b.pdf = p; await api('PATCH', aurl('/versions/' + v.id), b); await reload(); pdfToast(fd); }});
 }
 
 /* ---- documents ---- */
@@ -725,7 +728,7 @@ function moveToAnModal() {
     body: anStageFields(), setup: f => bindAnStage(f, false),
     onSubmit: async fd => {
       await api('PATCH', aurl(''), {title: a.title, stage: 'an_stage', ...(await anStageBody(fd))});
-      await loadAnalysis(S.an.id); if (isPub()) setCtx(latestAnv().id); toast('Moved to the AN stage'); go(L('')); render();
+      await loadAnalysis(S.an.id); if (isPub()) setCtx(latestAnv().id); toast('Moved to the AN stage'); go(L('')); render(); pdfToast(fd);
     }});
 }
 

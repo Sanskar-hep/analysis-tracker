@@ -210,7 +210,8 @@ function resetSession() {
   STATE_CACHE.clear(); TREE_CACHE.clear(); PENDING.clear();
 }
 async function ghConnect(repoInput, token, remember) {
-  const repo = normalizeRepo(repoInput); token = (token || '').trim();
+  const repo = normalizeRepo(repoInput); token = (token || '').replace(/\s+/g, '');   // phones add spaces / line breaks when pasting
+  if (token && !/^(github_pat_|ghp_|gho_|ghu_|ghs_)/.test(token)) throw E(400, 'That does not look like a GitHub token. It should start with "github_pat_". (A GitHub password does not work here.)');
   if (!repo) throw E(400, 'Enter the data repository as owner/name, for example my-group/analysis-tracker-data');
   if (!token) throw E(400, 'Paste your GitHub access token');
   resetSession(); Object.assign(GHS, {token, repo});
