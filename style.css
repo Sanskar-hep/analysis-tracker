@@ -258,3 +258,50 @@ td.pre{white-space:pre-wrap}
 .pitem .ptxt{font-size:13.5px;overflow-wrap:anywhere} .pitem .pbtn{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .pdfpick{padding:44px}
 @media (max-width:1000px){.pdfwrap{grid-template-columns:1fr}.pdfpane{height:70vh}.pdfside{max-height:none}}
+
+/* ---- phones and small tablets ---- */
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+img,canvas,video{max-width:100%}
+@media (max-width:1000px){
+  .top{flex-wrap:wrap;gap:8px 8px;padding:10px 12px}
+  .top .spacer{display:none}
+  .top .menu{order:0;font-size:22px;padding:2px 10px}
+  .top .ctxsel{order:1;flex:1 1 150px;min-width:0}
+  .top .ctxsel select{min-width:0;width:100%;max-width:100%;text-overflow:ellipsis}
+  .top .who{order:2;gap:6px;flex:0 0 auto}
+  .top .iconbtn[data-act=theme]{order:3}
+  .top .search{order:9;flex:1 1 100%;max-width:none}
+  .results{max-height:60vh}
+  .side{width:min(300px,86vw)}
+  .content{padding:14px 12px 40px}
+  h1{font-size:21px}
+  .tiles{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .acards{grid-template-columns:1fr}
+  .pagehead .actions{width:100%}
+  .btn{min-height:40px}
+  .btn.sm{min-height:34px}
+  .banner{align-items:flex-start}
+  .uh,.rv{grid-template-columns:1fr}
+  .rv .ra{justify-content:flex-start}
+  .cmpgrid{grid-template-columns:1fr !important}
+  .irow1{flex-direction:column;align-items:stretch}
+  .irow .iloc{width:100%}
+  .kv.tight{grid-template-columns:1fr}
+  .vitem{grid-template-columns:22px 56px 1fr}
+  .vitem.rev{padding-left:18px}
+  .pdftools{gap:8px}
+}
+@media (max-width:700px){
+  .top .who>span,.top .ctxsel>span{display:none}
+  .overlay{padding:0;align-items:end}
+  .modal,.modal.wide,.modal.xl{width:100%;max-height:94vh;border-radius:14px 14px 0 0}
+  .modal footer .btn{flex:1}
+  .guide{align-items:stretch} .guide .actions{width:100%}
+  .authcard{padding:22px 18px}
+  .authwrap{padding:12px;align-items:start}
+  .pdfpane{height:66vh;padding:6px}
+  .tiles .tile b{font-size:24px}
+  .vtable th,.vtable td{padding:8px 10px}
+}
+@media (max-width:1000px){ .two,.split,.pdfwrap{grid-template-columns:minmax(0,1fr)} .two>div,.split>*{min-width:0} .row .t{min-width:0} }
+@media (max-width:1000px){ .side{left:-110vw;width:min(300px,86vw);box-shadow:none} .side.open{left:0;box-shadow:var(--shadow)} }

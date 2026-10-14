@@ -4,7 +4,26 @@
  * Uses the app's globals (S, api, aurl, openModal, field, ...) at call time. */
 (function () {
   'use strict';
-  const PDFV = {vid: null, doc: null, fp: null, match: null, tool: 'text', zoom: 1, placing: null, jump: null, scale: 1, io: null};
+  const PDFV = {error: '', vid: null, doc: null, fp: null, match: null, tool: 'text', zoom: 1, placing: null, jump: null, scale: 1, io: null};
+
+  /* A copy of the PDF is kept in this browser (IndexedDB) so it reopens by itself, even after the page is reloaded or the
+     phone drops the tab. It is stored on this device only and never uploaded. */
+  const key = vid => `${S.an.id}:${vid}`;
+  const pdfDb = () => new Promise((res, rej) => { const r = indexedDB.open('analysis-tracker-pdfs', 1); r.onupgradeneeded = () => r.result.createObjectStore('files'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+  const dbDo = async (mode, fn) => { const db = await pdfDb(); return new Promise((res, rej) => { const t = db.transaction('files', mode), q = fn(t.objectStore('files')); t.oncomplete = () => res(q && q.result); t.onerror = () => rej(t.error); }); };
+  async function saveCopy(vid, file) {
+    try {
+      await dbDo('readwrite', s => s.put({name: file.name, size: file.size, saved: Date.now(), blob: file}, key(vid)));
+      const all = await dbDo('readonly', s => s.getAllKeys()); if (all.length > 6) {            // keep only the 6 most recent
+        const rows = await Promise.all(all.map(async k => ({k, v: await dbDo('readonly', s => s.get(k))})));
+        rows.sort((a, b) => (b.v?.saved || 0) - (a.v?.saved || 0)); for (const r of rows.slice(6)) await dbDo('readwrite', s => s.delete(r.k));
+      }
+      PDFV.saved = true; if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+    } catch { PDFV.saved = false; }
+  }
+  const loadCopy = async vid => { try { return await dbDo('readonly', s => s.get(key(vid))); } catch { return null; } };
+  const dropCopy = vid => dbDo('readwrite', s => s.delete(key(vid))).catch(() => {});
+  async function clearAll() { try { await dbDo('readwrite', s => s.clear()); } catch {} PDFV.saved = false; PDFV.doc = null; }
 
   const loadScript = src => new Promise((res, rej) => {
     if (window.pdfjsLib) return res();
@@ -21,28 +40,31 @@
   }
   const cls = it => it.status === 'resolved' ? 'resolved' : (it.answer || '').trim() ? 'answered' : 'pending';
 
-  async function openFile(file) {
+  async function openFile(file, fromStore) {
     await ensureLib();
-    const fp = await pdfFingerprint(file), v = anv(PDFV.vid);
+    PDFV.file = file; const fp = await pdfFingerprint(file), v = anv(PDFV.vid);
     const doc = await pdfjsLib.getDocument({data: new Uint8Array(await file.arrayBuffer())}).promise;
     fp.pages = doc.numPages; PDFV.fp = fp; PDFV.doc = doc; PDFV.match = v.pdf ? v.pdf.sha256 === fp.sha256 : null;
+    if (fromStore) PDFV.saved = true; else if (PDFV.match !== false) await saveCopy(PDFV.vid, file);   // a mismatching file is stored only if you choose to record it
   }
 
   /* ---------------- page ---------------- */
   function viewPdf(vid) {
     const v = anv(vid); if (!v) return notFound();
-    if (PDFV.vid !== vid) Object.assign(PDFV, {vid, doc: null, fp: null, match: null, placing: null, scroll: 0});
+    if (PDFV.vid !== vid) Object.assign(PDFV, {vid, doc: null, fp: null, match: null, placing: null, scroll: 0, restoreTried: false, saved: false, file: null});
     const its = items(vid), todo = its.filter(i => !i.anchor), done = its.filter(i => i.anchor);
     const rec = v.pdf ? `${esc(v.pdf.name)} · ${(v.pdf.size / 1048576).toFixed(1)} MB` : '';
+    const err = PDFV.error ? `<div class="banner"><span><b>The PDF could not be opened.</b> ${esc(PDFV.error)}</span></div>` : '';
     const head = `<div class="crumbs"><a href="${L('')}">Dashboard</a> / <a href="${L('/reviewer')}" data-act="to-review" data-id="${vid}">AN review</a> / PDF</div>
-      <div class="pagehead"><div><h1>${anvLabel(v)} · PDF</h1><p>Open the PDF from your computer. It is only shown here, never uploaded. Highlight what the convenors mentioned and attach the comment.</p></div>
-      <div class="actions"><label class="btn primary" style="cursor:pointer">${PDFV.doc ? 'Choose another PDF' : 'Choose the PDF…'}<input id="pdffile" type="file" accept="application/pdf,.pdf" hidden></label></div></div>`;
-    if (!PDFV.doc) return head + `<div class="card empty pdfpick"><p style="margin:0 0 6px"><b>Choose the PDF of ${anvLabel(v)}</b></p><p class="meta" style="margin:0">${rec ? 'Expected file: <span class="mono">' + rec + '</span>. The tracker checks a fingerprint so you open the right one.' : 'No PDF has been recorded for this version yet. The first one you open can be recorded.'}</p></div>`
+      <div class="pagehead"><div><h1>${anvLabel(v)} · PDF</h1><p>Open the PDF from your device. It is only shown here, never uploaded. Highlight what the convenors mentioned and attach the comment.</p></div>
+      <div class="actions"><label class="btn primary" style="cursor:pointer">${PDFV.doc ? 'Choose another PDF' : 'Choose the PDF…'}<input id="pdffile" type="file" accept="application/pdf,.pdf" hidden></label>${PDFV.saved ? '<button class="btn" data-act="pdf" data-op="forget" title="Delete the copy kept in this browser">Remove saved copy</button>' : ''}</div></div>`;
+    const saved = PDFV.saved ? `<div class="meta" style="margin:-10px 0 14px">A copy is kept in this browser so it reopens by itself (never uploaded). Use <b>Remove saved copy</b> to delete it.</div>` : '';
+    if (!PDFV.doc) return head + err + `<div class="card empty pdfpick"><p style="margin:0 0 6px"><b>Choose the PDF of ${anvLabel(v)}</b></p><p class="meta" style="margin:0">${rec ? 'Expected file: <span class="mono">' + rec + '</span>. The tracker checks a fingerprint so you open the right one.' : 'No PDF has been recorded for this version yet. The first one you open can be recorded.'}</p></div>`
       + (its.length ? `<div class="sechead"><h2>Comments waiting to be placed <span class="count">${todo.length}</span></h2></div>${todo.map(i => sideItem(i, false)).join('') || '<div class="card empty">All comments are placed.</div>'}` : '');
     const warn = PDFV.match === false ? `<div class="banner"><span><b>This is not the recorded file.</b> It differs from ${rec}. Highlights may not line up with the pages.</span><span class="actions"><button class="btn sm" data-act="pdf" data-op="record">Record this file instead</button></span></div>`
       : PDFV.match === null ? `<div class="banner draft"><span>No PDF is recorded for ${anvLabel(v)} yet.</span><span class="actions"><button class="btn sm primary" data-act="pdf" data-op="record">Record this file (${esc(PDFV.fp.name)})</button></span></div>` : '';
     const placing = PDFV.placing ? (() => { const it = its.find(i => i.kind === PDFV.placing.kind && i.id === PDFV.placing.id); return it ? `<div class="banner draft"><span><b>Placing:</b> ${esc(it.label)} — “${esc(it.text.length > 90 ? it.text.slice(0, 90) + '…' : it.text)}”. Select the text, or switch to <b>Draw a box</b> for a figure or table.</span><span class="actions"><button class="btn sm" data-act="pdf" data-op="cancel">Cancel</button></span></div>` : ''; })() : '';
-    return `${head}${warn}${placing}
+    return `${head}${saved}${warn}${placing}
       <div class="pdftools"><div class="modes"><button class="${PDFV.tool === 'text' ? 'on' : ''}" data-act="pdf" data-op="tool" data-id="text">Highlight text</button><button class="${PDFV.tool === 'box' ? 'on' : ''}" data-act="pdf" data-op="tool" data-id="box">Draw a box</button></div>
         <span class="meta">${PDFV.doc.numPages} pages</span><span class="spacer"></span><button class="btn sm" data-act="pdf" data-op="zoomout">−</button><span class="meta">${Math.round(PDFV.zoom * 100)}%</span><button class="btn sm" data-act="pdf" data-op="zoomin">+</button></div>
       <div class="pdfwrap"><div id="pdfpane" class="pdfpane ${PDFV.tool === 'box' ? 'tool-box' : ''}"></div>
@@ -60,9 +82,17 @@
   function mountPdf() {
     const f = $('#pdffile'); if (f) f.onchange = async () => {
       if (!f.files[0]) return; const done = busy('Opening the PDF…');
-      try { await openFile(f.files[0]); render(); } catch (e) { toast('Could not open this PDF: ' + e.message, 'err'); } finally { done(); }
+      try { PDFV.error = ''; await openFile(f.files[0]); render(); } catch (e) { PDFV.error = (e && e.message) || String(e); render(); toast('Could not open this PDF: ' + PDFV.error, 'err', 10000); } finally { done(); }
     };
-    if (PDFV.doc) buildPages();
+    if (PDFV.doc) { buildPages(); return; }
+    if (!PDFV.restoreTried) {                                    // reopen the copy kept on this device, if there is one
+      PDFV.restoreTried = true; const vid = PDFV.vid;
+      loadCopy(vid).then(async c => {
+        if (!c || !c.blob || PDFV.vid !== vid || PDFV.doc) return;
+        const done = busy('Opening your saved copy of the PDF…');
+        try { await openFile(new File([c.blob], c.name, {type: 'application/pdf'}), true); render(); } catch { await dropCopy(vid); PDFV.saved = false; } finally { done(); }
+      });
+    }
   }
   async function buildPages() {
     const pane = $('#pdfpane'); if (!pane) return;
@@ -196,7 +226,8 @@
     else if (op === 'cancel') { PDFV.placing = null; render(); }
     else if (op === 'goto') jumpTo(kind, id);
     else if (op === 'unplace') { await api('POST', aurl(`/${kind === 'anc' ? 'an-comments' : 'reviews'}/${id}/anchor`), {anchor: null}); await reload(); }
-    else if (op === 'record') { await api('PATCH', aurl('/versions/' + PDFV.vid), {pdf: PDFV.fp}); PDFV.match = true; await reload(); toast('PDF recorded for ' + anvLabel(anv(PDFV.vid))); }
+    else if (op === 'forget') { await dropCopy(PDFV.vid); PDFV.saved = false; PDFV.doc = null; PDFV.restoreTried = true; render(); toast('Removed the saved copy from this device'); }
+    else if (op === 'record') { await api('PATCH', aurl('/versions/' + PDFV.vid), {pdf: PDFV.fp}); PDFV.match = true; if (PDFV.file) await saveCopy(PDFV.vid, PDFV.file); await reload(); toast('PDF recorded for ' + anvLabel(anv(PDFV.vid))); }
   }
   /* open the viewer for a version, or jump to where a comment is placed */
   function open(el) {
@@ -207,8 +238,8 @@
       jump = {kind: k, id};
     }
     if (!vid) { toast('Select an AN version first.', 'err'); return; }
-    PDFV.jump = jump; if (PDFV.vid !== vid) Object.assign(PDFV, {vid, doc: null, fp: null, match: null, scroll: 0});
+    PDFV.jump = jump; if (PDFV.vid !== vid) Object.assign(PDFV, {vid, doc: null, fp: null, match: null, scroll: 0, restoreTried: false, saved: false, file: null});
     go(L('/pdf/' + vid)); if (route()[3] === vid) render();
   }
-  window.PDF = {viewPdf, mountPdf, act, open, openFile, state: PDFV};
+  window.PDF = {viewPdf, mountPdf, act, open, openFile, clearAll, state: PDFV};
 })();

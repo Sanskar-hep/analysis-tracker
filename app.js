@@ -994,8 +994,8 @@ function importModal(mode) {
 const A = {
   menu: () => $('#side').classList.toggle('open'),
   theme: () => { const cur = document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); const n = cur === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = n; lsSet('at_theme', n); },
-  logout: () => confirmBox('Disconnect', `Remove <b>${esc(GHS.repo)}</b> from this device? Your data stays safe in GitHub; you can reconnect any time with a token.`, 'Disconnect', async () => {
-    ghForget(); await afterRepoChange(); }),
+  logout: () => confirmBox('Disconnect', `Remove <b>${esc(GHS.repo)}</b> from this device? Your data stays safe in GitHub; you can reconnect any time with a token. Saved copies of AN PDFs on this device are deleted too.`, 'Disconnect', async () => {
+    try { await PDF.clearAll(); } catch {} ghForget(); await afterRepoChange(); }),
   setrepo: async el => {
     if (el.value === '__add') { el.value = GHS.repo; return addRepoModal(); }
     if (el.value === GHS.repo) return;
@@ -1097,6 +1097,7 @@ document.addEventListener('change', async e => {     // "Your answer" boxes save
     saved.textContent = 'Saved ✓'; setTimeout(() => { saved.textContent = ''; }, 2000);
   } catch (err) { saved.textContent = ''; toast(err.message, 'err'); }
 });
+document.addEventListener('click', e => { const s = $('#side'); if (s && s.classList.contains('open') && !e.target.closest('#side') && !e.target.closest('[data-act=menu]')) s.classList.remove('open'); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') { $('.lightbox')?.remove(); $('.overlay')?.remove(); $('#results')?.classList.remove('show'); } });
 
 function onSearch(e) {
