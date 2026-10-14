@@ -29,6 +29,7 @@ function norm(st) {
     usages: st.usages.map(u => ({...u, versionId: u.plot_version_id, anvId: u.an_version_id, anVer: u.an_ver,
       reviews: u.reviews.map(r => ({...r, none: !!r.none, resolvedVersionId: r.resolved_version_id, resolvedAt: r.resolved_at}))})),
     docs: st.documents.map(d => ({...d, anvId: d.an_version_id})),
+    anc: (st.an_comments || []).map(c => ({...c, anvId: c.an_version_id, resolvedIn: c.resolved_in})),
   };
 }
 async function loadAnalysis(id) { S = norm(await api('GET', `/analyses/${id}`)); }
@@ -36,21 +37,24 @@ async function reload() { await loadAnalysis(S.an.id); render(); }
 async function loadList() { AL = (await api('GET', '/analyses')).analyses; }
 
 const CTX = {
-  note:     {label: 'Analysis Note',        short: 'AN',  roles: ['Reviewer 1', 'Reviewer 2', 'Reviewer 3', 'ARC member', 'Convener', 'Supervisor', 'Other']},
-  tmp:      {label: 'TMP meeting',          short: 'TMP', roles: ['Convener', 'TMP member', 'Supervisor', 'Other']},
-  group:    {label: 'Group meeting',        short: 'GM',  roles: ['Supervisor', 'Group member', 'Other']},
-  internal: {label: 'Internal review meeting', short: 'IM', roles: ['Supervisor', 'Collaborator', 'Other']},
-  collab:   {label: 'Collaboration meeting', short: 'CM', roles: ['Convener', 'Collaboration member', 'Supervisor', 'Other']},
+  note:     {label: 'Analysis Note', short: 'AN',  roles: ['Convener', 'Reviewer 1', 'Reviewer 2', 'Reviewer 3', 'ARC member', 'Supervisor', 'Other']},
+  meeting:  {label: 'Meeting',       short: 'MTG', roles: ['Convener', 'Meeting member', 'Supervisor', 'Other']},
+  // older records only (the interface now uses the single "meeting" kind with a typed name)
+  tmp:      {label: 'TMP meeting',   short: 'MTG', roles: ['Convener', 'Meeting member', 'Supervisor', 'Other']},
+  group:    {label: 'Group meeting', short: 'MTG', roles: ['Convener', 'Meeting member', 'Supervisor', 'Other']},
+  internal: {label: 'Internal review meeting', short: 'MTG', roles: ['Convener', 'Meeting member', 'Supervisor', 'Other']},
+  collab:   {label: 'Collaboration meeting',   short: 'MTG', roles: ['Convener', 'Meeting member', 'Supervisor', 'Other']},
 };
-const MEET_PAGES = {
-  tmp: {title: 'TMP meeting comments', types: ['tmp']},
-  internal: {title: 'Internal review & group meeting comments', types: ['internal', 'group']},
-  collab: {title: 'Collaboration meeting comments', types: ['collab']},
-};
+const kindOf = t => t === 'note' ? 'note' : 'meeting';                       // two review kinds: AN review and meetings
+const LEGACY_NAME = {tmp: 'TMP', group: 'Group meeting', internal: 'Internal review meeting', collab: 'Collaboration meeting'};
+const meetingName = u => u.title || LEGACY_NAME[u.type] || 'Meeting';
+const COMMENT_KINDS = {text: 'Text', table: 'Table', equation: 'Equation', general: 'General', figure: 'Figure'};
+const kindOfLoc = loc => /^tab/i.test(loc) ? 'table' : /^eq/i.test(loc) ? 'equation' : /^fig/i.test(loc) ? 'figure' : /^general/i.test(loc) ? 'general' : 'text';
 
 /* ---- analysis stage helpers ---- */
 const isAN = () => S.an.stage === 'an_stage';
 const isPub = () => isAN() && S.an.an_status === 'published';
+const meetingsOn = () => isAN() || !!S.an.presented || S.usages.some(u => u.type !== 'note') || S.anc.some(c => c.source === 'meeting');
 const anv = id => S.anv.find(x => x.id === id);
 const anvLabel = v => `AN v${v.number}`;
 const latestAnv = () => S.anv[S.anv.length - 1];
@@ -77,12 +81,16 @@ const visV = v => { const c = ctx(); return c.draft || (v.anvId && anv(v.anvId).
 const verOf = pid => S.versions.filter(v => v.plotId === pid && visV(v)).sort(byVer);
 const latest = pid => verOf(pid).slice(-1)[0];
 const visPlots = () => S.plots.filter(p => verOf(p.id).length);
-const cUsages = () => S.usages.filter(u => (u.anvId || null) === ctx().id);
+const cNotes = () => S.usages.filter(u => u.type === 'note' && (u.anvId || null) === ctx().id);   // AN figure records of the version being viewed
+const meetingUses = () => S.usages.filter(u => u.type !== 'note');                                   // meeting records are not tied to an AN version
+const cUsages = () => [...cNotes(), ...meetingUses()];
 const usesOf = vid => cUsages().filter(u => u.versionId === vid);
-const plotUses = pid => cUsages().filter(u => ver(u.versionId)?.plotId === pid);
+const plotUses = pid => cUsages().filter(u => ver(u.versionId)?.plotId === pid && visV(ver(u.versionId)));
 const pendingOf = us => us.flatMap(u => u.reviews.filter(r => !r.none && r.status === 'pending').map(r => ({u, r})));
-const allPending = () => pendingOf(S.usages);                    // global: across every version and the draft
-const pendingByTypes = types => pendingOf(S.usages.filter(u => types.includes(u.type)));
+const pendingAn = () => S.anc.filter(c => c.status === 'pending').map(c => ({c, an: true}));   // comments that are not about a plot (AN text/tables, meeting methodology)
+const allPending = () => [...pendingOf(S.usages), ...pendingAn()];      // global: across every version, the draft and all meetings
+const entryKind = e => e.an ? (e.c.source === 'meeting' ? 'meeting' : 'note') : kindOf(e.u.type);
+const pendingKind = k => allPending().filter(e => entryKind(e) === k);
 const BLANK = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
 const img = (v, cls = '') => v ? `<img class="${cls}" data-fid="${v.file_id}" data-ext="${v.ext}" src="${BLANK}" alt="${esc(plot(v.plotId)?.name)} ${verLabel(v)}">` : '';
 /* images are fetched from the repository on demand, then cached as blob URLs */
@@ -97,18 +105,23 @@ function hydrateImages() {
 }
 const imageUrl = v => fetchImage(S.an.id, v.file_id, v.ext);
 const whoStr = r => `${r.role}${r.name ? ' · ' + r.name : ''}`;
-const useTitle = u => u.type === 'note' ? `Analysis Note · Fig ${u.fig}` : `${CTX[u.type].label}${u.slide ? ' · slide ' + u.slide : ''}`;
+const useTitle = u => u.type === 'note' ? `Analysis Note · Fig ${u.fig}` : `${meetingName(u)}${u.slide ? ' · slide ' + u.slide : ''}`;
 const findReview = id => { for (const u of S.usages) { const r = u.reviews.find(x => x.id === id); if (r) return {u, r}; } return null; };
 const L = p => `#/a/${S.an.id}${p}`;
 
 /* ============================ ui primitives ============================ */
-function toast(msg, kind = '') {
+function toast(msg, kind = '', ms) {
   const t = document.createElement('div'); t.className = 'toast ' + kind; t.textContent = msg; document.body.appendChild(t);
-  setTimeout(() => t.remove(), kind === 'err' ? 4500 : 2800);
+  setTimeout(() => t.remove(), ms || (kind === 'err' ? 6000 : 2800));
 }
-function openModal({title, sub = '', body, submit = 'Save', wide = false, onSubmit, setup}) {
+/* persistent progress message for slow GitHub operations; returns a function that hides it */
+function busy(msg) {
+  const el = document.createElement('div'); el.className = 'busybar'; el.innerHTML = `<span class="spin"></span>${esc(msg)}`; document.body.appendChild(el);
+  return () => el.remove();
+}
+function openModal({title, sub = '', body, submit = 'Save', wide = false, xl = false, onSubmit, setup}) {
   const m = document.createElement('div'); m.className = 'overlay';
-  m.innerHTML = `<form class="modal ${wide ? 'wide' : ''}"><header><h3>${title}</h3><button type="button" class="x" data-close aria-label="Close">×</button></header>${sub ? `<p class="sub">${sub}</p>` : ''}<div class="mbody">${body}</div><footer><button type="button" class="btn" data-close>Cancel</button><button class="btn primary">${submit}</button></footer></form>`;
+  m.innerHTML = `<form class="modal ${xl ? 'xl' : wide ? 'wide' : ''}"><header><h3>${title}</h3><button type="button" class="x" data-close aria-label="Close">×</button></header>${sub ? `<p class="sub">${sub}</p>` : ''}<div class="mbody">${body}</div><footer><button type="button" class="btn" data-close>Cancel</button><button class="btn primary">${submit}</button></footer></form>`;
   document.body.appendChild(m);
   const f = $('form', m); const close = () => m.remove();
   m.addEventListener('mousedown', e => { if (e.target === m) close(); });
@@ -225,13 +238,14 @@ function renderSide() {
     return;
   }
   const sub = route().slice(2), pg = sub[0] || '', k = sub[1];
-  const pend = allPending().length, c = ctx();
+  const pend = allPending().length;
   const cats = S.cats.map(x => {
     const n = visPlots().filter(p => p.catId === x.id).length;
     return `<a href="${L('/cat/' + x.id)}" class="${pg === 'cat' && k === x.id ? 'on' : ''}"><span>${esc(x.name)}</span><span class="count">${n}</span></a>`;
   }).join('');
   const nav = (href, label, on, count) => `<a href="${href}" class="${on ? 'on' : ''}"><span>${label}</span>${count ? `<span class="count warn">${count}</span>` : ''}</a>`;
-  const pm = t => pendingByTypes(MEET_PAGES[t].types).length;
+  const reviews = (meetingsOn() ? nav(L('/meetings'), 'Meetings', pg === 'meetings', pendingKind('meeting').length) : '')
+    + (isPub() ? nav(L('/reviewer'), 'AN review (convenors)', pg === 'reviewer', pendingKind('note').length) : '');
   $('#side').innerHTML = `${brand}
     <a class="backlink" href="#/">← All analyses</a>
     <div class="aname">${esc(S.an.title)}</div>
@@ -240,15 +254,10 @@ function renderSide() {
       ${nav(L(''), 'Dashboard', !pg)}
       <div class="sec"><span>Plots</span><button class="iconbtn" data-act="new-cat" title="New category">+</button></div>
       <div class="sub">${cats || '<div class="meta" style="padding:6px 24px">No categories yet</div>'}</div>
-      <div class="sec"><span>Meeting comments</span></div>
-      ${nav(L('/meetings/tmp'), 'TMP meetings', pg === 'meetings' && k === 'tmp', pm('tmp'))}
-      ${nav(L('/meetings/internal'), 'Internal review &amp; group', pg === 'meetings' && k === 'internal', pm('internal'))}
-      ${nav(L('/meetings/collab'), 'Collaboration meetings', pg === 'meetings' && k === 'collab', pm('collab'))}
-      ${isPub() ? `<div class="sec"><span>Review</span></div>${nav(L('/reviewer'), 'Reviewer comments', pg === 'reviewer', pendingByTypes(['note']).length)}` : ''}
+      ${reviews ? `<div class="sec"><span>Comments</span></div>${reviews}` : ''}
+      ${isAN() ? `<div class="sec"><span>Analysis Note</span></div>${nav(L('/versions'), 'AN versions', pg === 'versions')}${nav(L('/docs'), 'Documents', pg === 'docs')}` : ''}
       <div class="sec"><span>Analysis</span></div>
-      ${isAN() ? nav(L('/versions'), 'AN versions', pg === 'versions') : ''}
-      ${nav(L('/pending'), 'All pending comments', pg === 'pending', pend)}
-      ${nav(L('/docs'), 'Documents', pg === 'docs')}
+      ${pend || isAN() ? nav(L('/pending'), 'All pending comments', pg === 'pending', pend) : ''}
       ${nav(L('/settings'), 'Settings', pg === 'settings')}
     </div>`;
 }
@@ -315,81 +324,124 @@ function anFields(cur = {}, forceWritten = false) {
     + field('Collaboration', `<input type="text" name="collaboration" value="${esc(cur.collaboration || '')}" placeholder="e.g. CMS, ATLAS" maxlength="100">`)
     + (forceWritten ? '' : field('AN status', radios('an_status', [['being_written', 'AN being written'], ['published', 'Version published']], cur.an_status || 'being_written')));
 }
+/* AN PDFs stay on the user's computer: only name, size and a SHA-256 fingerprint are saved, to check later that the right file is opened */
+const pdfField = hint => field('AN PDF', '<input type="file" name="pdf" accept="application/pdf,.pdf">', hint || 'Optional. The PDF stays on your computer: the tracker saves only its name, size and a fingerprint, so it can check you open the right file later.', true);
+async function pdfFingerprint(file) {
+  if (!file || !file.size) return null;
+  const h = new Uint8Array(await crypto.subtle.digest('SHA-256', await file.arrayBuffer()));
+  return {name: file.name, size: file.size, sha256: [...h].map(x => x.toString(16).padStart(2, '0')).join(''), pages: null};
+}
+const anStageFields = cur => `<div id="anbox" style="display:grid;gap:14px">${anFields(cur)}<div id="firstv" hidden style="display:none;gap:14px"><div class="cols">${field('Published version number', '<input type="text" name="vnum" value="1" inputmode="numeric">')}${field('Publication date', `<input type="date" name="vdate" value="${today()}">`)}</div>${pdfField()}</div></div>`;
+function bindAnStage(f, optional) {   // show the version fields only when "Version published" is chosen
+  const upd = () => {
+    const an = optional ? f.stage.value === 'an_stage' : true, pub = an && f.an_status.value === 'published';
+    $('#anbox', f).style.display = an ? 'grid' : 'none'; $('#firstv', f).style.display = pub ? 'grid' : 'none'; $('#firstv', f).hidden = !pub;
+    f.an_name.required = f.collaboration.required = an;
+  };
+  f.querySelectorAll('[name=stage],[name=an_status]').forEach(x => x.addEventListener('change', upd)); upd();
+}
+async function anStageBody(fd) {
+  const b = {an_name: fd.get('an_name').trim(), collaboration: fd.get('collaboration').trim(), an_status: fd.get('an_status')};
+  if (b.an_status === 'published') {
+    const n = parseInt(fd.get('vnum'), 10); if (!(n >= 1)) throw new Error('Version number must be a positive whole number');
+    b.first_version = {number: n, published_on: fd.get('vdate') || today(), pdf: await pdfFingerprint(fd.get('pdf'))};
+  }
+  return b;
+}
 function newAnalysisModal() {
   openModal({title: 'New analysis', sub: 'Everything you add — plots, comments, documents — will belong to this analysis.', submit: 'Create analysis', wide: true,
     body: field('Analysis title', '<input type="text" name="title" required maxlength="150" placeholder="e.g. Top-Quark Charge Asymmetry">')
-      + field('Analysis stage', radios('stage', [['just_started', 'Just started'], ['an_stage', 'AN stage']], 'just_started'), 'You can move to the AN stage later from the analysis settings.')
-      + `<div id="anbox" hidden style="display:grid;gap:14px">${anFields()}<div id="firstv" hidden style="display:grid;gap:14px"><div class="cols">${field('Published version number', '<input type="text" name="vnum" value="1" inputmode="numeric">')}${field('Publication date', `<input type="date" name="vdate" value="${today()}">`)}</div></div></div>`,
-    setup: f => {
-      const upd = () => {
-        const an = f.stage.value === 'an_stage', pub = f.an_status.value === 'published';
-        $('#anbox', f).hidden = !an; $('#anbox', f).style.display = an ? 'grid' : 'none';
-        $('#firstv', f).hidden = !pub; $('#firstv', f).style.display = pub ? 'grid' : 'none';
-        f.an_name.required = f.collaboration.required = an;
-      };
-      f.querySelectorAll('[name=stage],[name=an_status]').forEach(x => x.addEventListener('change', upd)); upd();
-    },
+      + field('Analysis stage', radios('stage', [['just_started', 'Just started'], ['an_stage', 'AN stage']], 'just_started'), 'You can move to the AN stage later with the “Have you moved to the AN stage?” button on the dashboard.')
+      + anStageFields(),
+    setup: f => bindAnStage(f, true),
     onSubmit: async fd => {
       const body = {title: fd.get('title').trim(), stage: fd.get('stage')};
-      if (body.stage === 'an_stage') {
-        Object.assign(body, {an_name: fd.get('an_name').trim(), collaboration: fd.get('collaboration').trim(), an_status: fd.get('an_status')});
-        if (body.an_status === 'published') { const n = parseInt(fd.get('vnum'), 10); if (!(n >= 1)) throw new Error('Version number must be a positive whole number'); body.first_version = {number: n, published_on: fd.get('vdate') || today()}; }
-      }
+      if (body.stage === 'an_stage') Object.assign(body, await anStageBody(fd));
       const r = await api('POST', '/analyses', body); go('#/a/' + r.id);
     }});
 }
 
 /* ============================ views: analysis workspace ============================ */
-function ctxBadge(t, extra = '') { return `<span class="badge ${t}">${CTX[t].short}${extra}</span>`; }
+function ctxBadge(t, extra = '') { const k = kindOf(t); return `<span class="badge ${k}">${k === 'note' ? 'AN' : 'Meeting'}${extra}</span>`; }
 function plotBadges(pid) {
-  const us = plotUses(pid), types = Object.keys(CTX).filter(t => us.some(u => u.type === t)), pend = pendingOf(us).length;
-  return types.map(t => ctxBadge(t)).join('') + (pend ? `<span class="badge pending">${pend} pending</span>` : '');
+  const us = plotUses(pid), pend = pendingOf(us).length;
+  return ['note', 'meeting'].filter(k => us.some(u => kindOf(u.type) === k)).map(k => ctxBadge(k)).join('') + (pend ? `<span class="badge pending">${pend} pending</span>` : '');
 }
-function pendRow(u, r) {
-  const v = ver(u.versionId), p = plot(v.plotId);
-  return `<div class="row" data-go="${L('/plot/' + p.id)}" data-sel="${v.id}" data-ctx="${u.anvId || 'draft'}">${img(v)}<div class="t"><b>${esc(p.name)} <span class="badge">${verLabel(v)}</span> ${ctxBadge(u.type, u.type === 'note' ? ' · Fig ' + esc(u.fig) : '')}${isPub() ? ' ' + ctxChip(u.anvId) : ''}</b><span>${esc(whoStr(r))}: ${esc(r.text)}</span></div></div>`;
+function pendRow(e) {
+  if (e.an) {
+    const c = e.c, meet = c.source === 'meeting';
+    return `<div class="row" data-go="${L(meet ? '/meetings' : '/reviewer')}" ${meet ? '' : `data-ctx="${c.anvId}"`}><div class="ancbox ${meet ? 'm' : ''}">${meet ? 'MTG' : 'AN'}</div><div class="t"><b>${c.location ? esc(c.location) : (meet ? esc(c.meeting) : 'Analysis Note')} ${meet ? `<span class="badge meeting">${esc(c.meeting)}</span>` : ctxBadge('note') + ' ' + ctxChip(c.anvId)}</b><span>${esc(whoStr(c))}: ${esc(c.text)}</span></div></div>`;
+  }
+  const {u, r} = e, v = ver(u.versionId), p = plot(v.plotId), note = u.type === 'note';
+  return `<div class="row" data-go="${L('/plot/' + p.id)}" data-sel="${v.id}" data-ctx="${u.anvId || 'draft'}">${img(v)}<div class="t"><b>${esc(p.name)} <span class="badge">${verLabel(v)}</span> ${note ? ctxBadge('note', ' · Fig ' + esc(u.fig)) : `<span class="badge meeting">${esc(meetingName(u))}</span>`}${note && isPub() ? ' ' + ctxChip(u.anvId) : ''}</b><span>${esc(whoStr(r))}: ${esc(r.text)}</span></div></div>`;
+}
+
+/* "where are you?" prompts on the dashboard */
+function guideCards() {
+  const card = (title, text, btns) => `<div class="card pad guide"><div><b>${title}</b><div class="meta">${text}</div></div><div class="actions">${btns}</div></div>`;
+  const out = [];
+  if (!isAN()) {
+    out.push(card('Have you moved to the AN stage?', 'For now this analysis is just plots. Once you start an Analysis Note, move it to the AN stage to record AN versions and the convenors’ comments.', '<button class="btn primary" data-act="to-an">Yes, move to the AN stage</button>'));
+    out.push(meetingsOn()
+      ? card('Meetings', `${meetingUses().length} plot record${meetingUses().length === 1 ? '' : 's'} · ${pendingKind('meeting').length} pending comment${pendingKind('meeting').length === 1 ? '' : 's'}.`, `<a class="btn" href="${L('/meetings')}">Open meetings</a>`)
+      : card('Have you presented in a meeting?', 'If yes, you can record the comments people gave on your plots, and any methodology suggestions.', '<button class="btn" data-act="presented-yes">Yes, I’ve presented</button>'));
+  } else if (!isPub()) {
+    out.push(card('Your AN is being written', 'When a version of the AN is published, record it here: you can then add the convenors’ comments and link them to your plots.', `<a class="btn primary" href="${L('/versions')}">Publish an AN version</a>`));
+  } else if (!(ui.hideAsk || {})[S.an.id]) {
+    const v = latestAnv(), n = pendingKind('note').length;
+    out.push(card(`Are there any comments on AN v${v.number}?`, n ? `${n} comment${n === 1 ? ' is' : 's are'} still pending.` : 'If the convenors or a meeting have commented, add their comments here.',
+      '<button class="btn primary" data-act="comments-yes">Yes, add comments</button><button class="btn" data-act="comments-no">Not yet</button>'));
+  }
+  return out.join('');
+}
+function commentsChooser() {
+  openModal({title: 'Where did the comments come from?', submit: 'Continue', sub: 'Choose the source. You can come back and add the other later.',
+    body: radios('src', [['an', 'The convenors (review of the AN)'], ['meeting', 'A meeting']], 'an'),
+    onSubmit: async fd => { if (fd.get('src') === 'an') { setCtx(latestAnv().id); go(L('/reviewer')); } else go(L('/meetings')); render(); }});
 }
 
 function viewDash() {
   const pend = allPending(), vp = visPlots(), vv = S.versions.filter(visV), cu = cUsages();
-  const resolved = S.usages.flatMap(u => u.reviews).filter(r => !r.none && r.status === 'resolved').length;
+  const resolved = S.usages.flatMap(u => u.reviews).filter(r => !r.none && r.status === 'resolved').length + S.anc.filter(c => c.status === 'resolved').length;
   const cats = S.cats.map(c => {
     const ps = vp.filter(p => p.catId === c.id).sort((a, b) => b.created - a.created), lv = ps.length ? latest(ps[0].id) : null;
     const nv = ps.reduce((n, p) => n + verOf(p.id).length, 0);
     return `<div class="card pc" data-go="${L('/cat/' + c.id)}"><div class="th ${lv ? '' : 'empty'}">${lv ? img(lv) : 'No plots yet'}</div><div class="bd"><h3>${esc(c.name)}</h3><div class="meta">${ps.length} plot${ps.length === 1 ? '' : 's'} · ${nv} version${nv === 1 ? '' : 's'}</div></div></div>`;
   }).join('');
-  const counts = Object.keys(CTX).filter(t => t !== 'note' || isAN()).map(t => ({t, n: cu.filter(u => u.type === t).length}));
+  const counts = [{k: 'note', c: 'note', label: 'Analysis Note'}, {k: 'meeting', c: 'tmp', label: 'Meetings'}].filter(x => x.k !== 'note' ? meetingsOn() : isAN())
+    .map(x => ({...x, n: cu.filter(u => kindOf(u.type) === x.k).length}));
   const tot = counts.reduce((a, b) => a + b.n, 0) || 1;
   const recent = [...vv].sort((a, b) => b.created - a.created).slice(0, 6).map(v => {
     const p = plot(v.plotId);
     return `<div class="row" data-go="${L('/plot/' + p.id)}" data-sel="${v.id}">${img(v)}<div class="t"><b>${esc(p.name)} <span class="badge">${verLabel(v)}</span></b><span>${esc(v.summary)}</span></div><span class="meta">${fmtDate(v.created)}</span></div>`;
   }).join('');
   const anTile = isAN() ? `<div class="card tile"><b style="font-size:18px;line-height:1.4">${esc(S.an.an_name)}</b><span>${esc(S.an.collaboration)} · ${isPub() ? `AN v${latestAnv().number} published` : 'AN being written'}</span></div>` : '';
-  return `${banner()}<div class="pagehead"><div><h1>${esc(S.an.title)}</h1><p>${ctx().draft ? 'Working draft' : ctx().label} · plots, versions and what was said about them.</p></div>
+  const showComments = meetingsOn() || isPub();
+  return `${banner()}<div class="pagehead"><div><h1>${esc(S.an.title)}</h1><p>${ctx().draft ? 'Working draft' : ctx().label} · your plots${showComments ? ' and what was said about them' : ''}.</p></div>
     <div class="actions"><button class="btn primary" data-act="new-plot">+ New plot</button></div></div>
+  <div class="guides">${guideCards()}</div>
   <div class="tiles">${anTile}
     <div class="card tile"><b>${vp.length}</b><span>Plots</span></div>
     <div class="card tile"><b>${vv.length}</b><span>Plot versions</span></div>
-    <div class="card tile ${pend.length ? 'warn' : ''}"><b>${pend.length}</b><span>Pending comments (all versions)</span></div>
-    <div class="card tile"><b>${resolved}</b><span>Comments resolved</span></div></div>
+    ${showComments ? `<div class="card tile ${pend.length ? 'warn' : ''}"><b>${pend.length}</b><span>Pending comments</span></div><div class="card tile"><b>${resolved}</b><span>Comments resolved</span></div>` : ''}</div>
   <div class="sechead"><h2>Plot categories</h2><button class="btn sm" data-act="new-cat">+ New category</button></div>
   ${S.cats.length ? `<div class="grid">${cats}</div>` : '<div class="card empty">No categories yet. Create a category (e.g. “Electron pT”) or click <b>New plot</b> to start.</div>'}
   <div class="two">
-    <div><h2>Needs attention</h2><div class="card" style="margin-top:10px">${pend.slice(0, 6).map(({u, r}) => pendRow(u, r)).join('') || '<div class="empty">🎉 No pending comments</div>'}</div>
-      ${pend.length > 6 ? `<p><a href="${L('/pending')}">See all ${pend.length} pending →</a></p>` : ''}</div>
-    <div><h2>Where plots are used${ctx().draft ? '' : ' in ' + ctx().label}</h2>
-      <div class="card pad" style="margin-top:10px"><div class="splitbar">${counts.map(c => c.n ? `<div style="width:${c.n / tot * 100}%;background:var(--${c.t})"></div>` : '').join('')}</div>
-        <div class="legend">${counts.map(c => `<span><i class="dot" style="background:var(--${c.t})"></i>${CTX[c.t].label} <b>${c.n}</b></span>`).join('')}</div></div>
+    ${showComments ? `<div><h2>Needs attention</h2><div class="card" style="margin-top:10px">${pend.slice(0, 6).map(e => pendRow(e)).join('') || '<div class="empty">🎉 No pending comments</div>'}</div>
+      ${pend.length > 6 ? `<p><a href="${L('/pending')}">See all ${pend.length} pending →</a></p>` : ''}</div>` : '<div></div>'}
+    <div>${counts.length ? `<h2>Where plots are used${ctx().draft ? '' : ' in ' + ctx().label}</h2>
+      <div class="card pad" style="margin-top:10px"><div class="splitbar">${counts.map(c => c.n ? `<div style="width:${c.n / tot * 100}%;background:var(--${c.c})"></div>` : '').join('')}</div>
+        <div class="legend">${counts.map(c => `<span><i class="dot" style="background:var(--${c.c})"></i>${c.label} <b>${c.n}</b></span>`).join('')}</div></div>` : ''}
       <h2 style="margin-top:22px">Recent plot versions</h2><div class="card" style="margin-top:10px">${recent || '<div class="empty">Nothing yet</div>'}</div></div>
   </div>`;
 }
 
 function viewPending() {
-  const f = ui.pf || 'all';
-  const list = allPending().filter(({u}) => f === 'all' || u.type === f);
-  return `<div class="pagehead"><div><h1>Pending comments</h1><p>Everything that still needs a response or an updated plot, across all AN versions and the working draft.</p></div>
-    <div class="chips">${['all', ...Object.keys(CTX).filter(t => t !== 'note' || isAN())].map(t => `<span class="chip ${f === t ? 'on' : ''}" data-act="pfilter" data-id="${t}">${t === 'all' ? 'All' : CTX[t].label}</span>`).join('')}</div></div>
-    <div class="card">${list.map(({u, r}) => pendRow(u, r)).join('') || '<div class="empty">🎉 Nothing pending</div>'}</div>`;
+  const f = ui.pf || 'all', list = allPending().filter(e => f === 'all' || entryKind(e) === f);
+  const chips = [['all', 'All'], ...(isAN() ? [['note', 'AN review']] : []), ['meeting', 'Meetings']];
+  return `<div class="pagehead"><div><h1>Pending comments</h1><p>Everything that still needs an answer or an updated plot, across all AN versions, the working draft and all meetings.</p></div>
+    <div class="chips">${chips.map(([t, l]) => `<span class="chip ${f === t ? 'on' : ''}" data-act="pfilter" data-id="${t}">${l}</span>`).join('')}</div></div>
+    <div class="card">${list.map(e => pendRow(e)).join('') || '<div class="empty">🎉 Nothing pending</div>'}</div>`;
 }
 
 function usageList(us, emptyMsg) {
@@ -397,21 +449,68 @@ function usageList(us, emptyMsg) {
   return us.map(u => { const v = ver(u.versionId), p = plot(v.plotId);
     return `<div class="uhead" data-go="${L('/plot/' + p.id)}" data-sel="${v.id}">${img(v)}<div><b>${esc(p.name)}</b> <span class="badge">${verLabel(v)}</span><div class="meta">${esc(cat(p.catId)?.name || '')}</div></div></div>${usageCard(u)}`; }).join('');
 }
-function viewMeetings(key) {
-  const pg = MEET_PAGES[key]; if (!pg) return notFound();
-  const us = cUsages().filter(u => pg.types.includes(u.type)).sort((a, b) => (b.date || '').localeCompare(a.date || '') || b.created - a.created);
-  return `${banner()}<div class="pagehead"><div><h1>${pg.title}</h1><p>${us.length} record${us.length === 1 ? '' : 's'} in ${ctx().draft ? 'the working draft' : ctx().label}. To add one, open a plot and choose <b>+ ${CTX[pg.types[0]].label}</b>.</p></div></div>
-    ${usageList(us, 'No plots recorded for this meeting type yet.')}`;
+
+/* ---- answers: one text box under every comment, saved when you click away ---- */
+const ansBox = (kind, id, val) => `<div class="ansbox"><label>Your answer</label><textarea class="ans" data-kind="${kind}" data-id="${id}" rows="2" maxlength="5000" placeholder="Write your reply to this comment…">${esc(val || '')}</textarea><span class="saved" aria-live="polite"></span></div>`;
+const stateOf = (status, answer) => status === 'resolved' ? ['resolved', '✓ Resolved'] : (answer || '').trim() ? ['answered', 'Answered'] : ['pending', 'Pending'];
+function anchorLine(item, kind) {
+  const an = item.anchor;
+  if (an) return `<div class="anchor"><button class="link" data-act="open-pdf" data-kind="${kind}" data-id="${item.id}">📍 page ${an.page}${an.quote ? ' · “' + esc(an.quote.length > 70 ? an.quote.slice(0, 70) + '…' : an.quote) + '”' : ' · marked area'}</button></div>`;
+  return '';
 }
+
+/* a comment that is not about a plot: AN text/table/methodology (from the convenors), or a methodology suggestion from a meeting */
+function ancCard(c) {
+  const res = c.status === 'resolved', [cls, label] = stateOf(c.status, c.answer), meet = c.source === 'meeting';
+  return `<div class="card ucard ${meet ? 'meeting' : 'note'}" id="c-${c.id}"><div class="rv" style="border-top:0"><div><div class="who">${c.kind && c.kind !== 'text' ? `<span class="badge">${COMMENT_KINDS[c.kind] || ''}</span> ` : ''}${c.location ? `<span class="badge stage">${esc(c.location)}</span> ` : ''}${esc(whoStr(c))} <span class="meta">· ${fmtDate(c.created)}</span></div>
+      <div class="txt">${esc(c.text)}</div>${anchorLine(c, 'anc')}</div>
+    <div class="ra"><span class="badge ${cls}">${label}</span>${res ? `<button class="btn sm" data-act="reopen-anc" data-id="${c.id}">Reopen</button>` : `<button class="btn sm primary" data-act="resolve-anc" data-id="${c.id}">Mark resolved</button><button class="btn sm" data-act="edit-anc" data-id="${c.id}">Edit</button>`}<button class="iconbtn" data-act="del-anc" data-id="${c.id}" title="Delete">🗑</button></div>
+    <div style="grid-column:1/-1">${ansBox('anc', c.id, c.answer)}</div>
+    ${res ? `<div class="res">${c.resolvedIn && anv(c.resolvedIn) ? `Addressed in <b>${anvLabel(anv(c.resolvedIn))}</b><br>` : ''}${esc(c.resolution)}</div>` : ''}</div></div>`;
+}
+
+/* ---- meetings: one page, grouped by the meeting names you typed ---- */
+function viewMeetings() {
+  if (!meetingsOn()) return `<div class="card empty"><p>The Meetings section is off for this analysis.</p><button class="btn primary" data-act="presented-yes">Yes, I’ve presented in a meeting</button></div>`;
+  const f = ui.mf || 'all', groups = new Map(), key = (n, d) => n.toLowerCase().trim() + '|' + (d || '');
+  const grp = (name, date) => { const k = key(name, date); if (!groups.has(k)) groups.set(k, {name, date: date || '', uses: [], cmts: []}); return groups.get(k); };
+  meetingUses().forEach(u => grp(meetingName(u), u.date).uses.push(u));
+  S.anc.filter(c => c.source === 'meeting').forEach(c => grp(c.meeting, c.meeting_date).cmts.push(c));
+  const all = [...groups.values()], names = [...new Set(all.map(g => g.name))];
+  const list = all.filter(g => f === 'all' || g.name === f).sort((x, y) => (y.date || '').localeCompare(x.date || ''));
+  const nP = pendingKind('meeting').length;
+  const sections = list.map(g => {
+    const uses = [...g.uses].sort((x, y) => (parseFloat(x.slide) || 0) - (parseFloat(y.slide) || 0));
+    return `<div class="sechead"><h2>${esc(g.name)} <span class="meta">${fmtDay(g.date)}</span></h2></div>
+      ${g.cmts.length ? `<div class="meta" style="margin:-4px 0 8px">Methodology and general suggestions</div>${g.cmts.map(ancCard).join('')}` : ''}
+      ${uses.length ? `<div class="meta" style="margin:6px 0 0">Comments on plots</div>${usageList(uses, '')}` : ''}`;
+  }).join('');
+  return `<div class="pagehead"><div><h1>Meetings</h1><p>${all.length} meeting${all.length === 1 ? '' : 's'} · ${nP} pending comment${nP === 1 ? '' : 's'}. Comments about a plot and general methodology suggestions.</p></div>
+    <div class="actions"><button class="btn" data-act="import-email" data-type="meeting">Import comments from email</button><button class="btn" data-act="add-mplot">+ Plot shown in a meeting</button><button class="btn primary" data-act="add-mcomment">+ Methodology comment</button></div></div>
+    ${names.length > 1 ? `<div class="chips" style="margin-bottom:6px">${['all', ...names].map(n => `<span class="chip ${f === n ? 'on' : ''}" data-act="mfilter" data-id="${esc(n)}">${n === 'all' ? 'All meetings' : esc(n)}</span>`).join('')}</div>` : ''}
+    ${sections || '<div class="card empty">No meetings recorded yet. Use <b>+ Plot shown in a meeting</b> (a plot you presented), <b>+ Methodology comment</b> (a general suggestion), or open a plot and choose <b>+ Meeting</b>.</div>'}`;
+}
+
+/* ---- AN review: comments from the convenors on the published AN, in two groups ---- */
 function viewReviewer() {
   if (!isPub()) return notFound();
-  if (ctx().draft) return `${banner()}<div class="card empty">Reviewer comments belong to a published AN version. Select an AN version in the “Viewing” menu above to see its reviewer comments.</div>`;
-  const f = ui.rf || 'all';
-  const us = cUsages().filter(u => u.type === 'note').filter(u => f === 'all' || u.reviews.some(r => !r.none && r.status === f)).sort((a, b) => a.fig.localeCompare(b.fig, undefined, {numeric: true}));
-  const all = cUsages().filter(u => u.type === 'note').flatMap(u => u.reviews).filter(r => !r.none);
-  return `${banner()}<div class="pagehead"><div><h1>Reviewer comments · ${ctx().label}</h1><p>${all.filter(r => r.status === 'pending').length} pending · ${all.filter(r => r.status === 'resolved').length} resolved. These stay with ${ctx().label} even after newer versions are published.</p></div>
-    <div class="chips">${[['all', 'All'], ['pending', 'Pending'], ['resolved', 'Resolved']].map(([k, l]) => `<span class="chip ${f === k ? 'on' : ''}" data-act="rfilter" data-id="${k}">${l}</span>`).join('')}</div></div>
-    ${usageList(us, 'No Analysis Note figures recorded for this version yet. Open a plot and choose <b>+ Analysis Note</b>.')}`;
+  if (ctx().draft) return `${banner()}<div class="card empty">AN review comments belong to a published AN version. Select an AN version in the “Viewing” menu above.</div>`;
+  const f = ui.rf || 'all', c = ctx(), kf = ui.rk || 'all';
+  const figUs = cNotes().sort((a, b) => a.fig.localeCompare(b.fig, undefined, {numeric: true}));
+  const figShown = figUs.filter(u => f === 'all' || u.reviews.some(r => !r.none && (f === 'resolved' ? r.status === 'resolved' : r.status === 'pending')));
+  const ancAll = S.anc.filter(x => x.source === 'an' && x.anvId === c.id);
+  const ancShown = ancAll.filter(x => (f === 'all' || x.status === f) && (kf === 'all' || x.kind === kf));
+  const all = [...figUs.flatMap(u => u.reviews).filter(r => !r.none), ...ancAll], nP = all.filter(r => r.status === 'pending').length;
+  const kinds = [...new Set(ancAll.map(x => x.kind))];
+  const pdf = c.v.pdf;
+  return `${banner()}<div class="pagehead"><div><h1>AN review · ${c.label}</h1><p>${nP} pending · ${all.length - nP} resolved. These comments stay with ${c.label} even after newer versions are published.</p></div>
+    <div class="actions"><button class="btn" data-act="open-pdf" data-v="${c.id}">Open the AN PDF${pdf ? '' : ' …'}</button><button class="btn" data-act="import-email" data-type="note">Import comments from email</button><button class="btn" data-act="reply-doc">Reply document</button><button class="btn primary" data-act="add-anc">+ Add comment</button></div></div>
+    <div class="chips" style="margin-bottom:6px">${[['all', 'All'], ['pending', 'Pending'], ['resolved', 'Resolved']].map(([k, l]) => `<span class="chip ${f === k ? 'on' : ''}" data-act="rfilter" data-id="${k}">${l}</span>`).join('')}</div>
+    <div class="sechead"><h2>Comments on figures <span class="count">${figShown.length}</span></h2></div>
+    ${usageList(figShown, 'No comments on figures yet. Figures appear here when a plot is recorded as an AN figure (open a plot → <b>+ Analysis Note</b>) and a comment is added to it.')}
+    <div class="sechead"><h2>Comments on text, tables and methodology <span class="count">${ancShown.length}</span></h2></div>
+    ${kinds.length > 1 ? `<div class="chips" style="margin-bottom:10px">${['all', ...kinds].map(k => `<span class="chip ${kf === k ? 'on' : ''}" data-act="kfilter" data-id="${k}">${k === 'all' ? 'All kinds' : COMMENT_KINDS[k]}</span>`).join('')}</div>` : ''}
+    ${ancShown.length ? ancShown.map(ancCard).join('') : '<div class="card empty">No comments of this kind yet. Use <b>Import comments from email</b> or <b>+ Add comment</b>.</div>'}`;
 }
 
 function viewCat(id) {
@@ -435,7 +534,7 @@ function viewPlot(id) {
   ui.sel[id] = sel.id;
   const cmp = (ui.cmp[id] = (ui.cmp[id] || []).filter(i => ver(i) && visV(ver(i))));
   const list = [...vs].reverse().map(v => {
-    const us = usesOf(v.id), types = Object.keys(CTX).filter(t => us.some(u => u.type === t)), pend = pendingOf(us).length;
+    const us = usesOf(v.id), types = ['note', 'meeting'].filter(k => us.some(u => kindOf(u.type) === k)), pend = pendingOf(us).length;
     return `<div class="vitem ${v.rev ? 'rev' : ''} ${v.id === sel.id ? 'on' : ''}" data-act="selver" data-id="${v.id}">
       <input type="checkbox" data-act="cmp" data-id="${v.id}" ${cmp.includes(v.id) ? 'checked' : ''} title="Select to compare (max 5)">
       ${img(v)}<div><b>${verLabel(v)}</b> <span class="meta">· ${fmtDate(v.created)}</span>${isPub() ? ' ' + ctxChip(v.anvId) : ''}<div class="s">${esc(v.summary)}</div>
@@ -446,7 +545,7 @@ function viewPlot(id) {
   const fr = sel.review_id && findReview(sel.review_id);
   if (fr) respTo = `<div class="resp"><b>Revision of ${parent ? verLabel(parent) : 'an earlier version'}</b> in response to <b>${esc(whoStr(fr.r))}</b> (${esc(useTitle(fr.u))}${fr.u.anvId ? ' · ' + anvLabel(anv(fr.u.anvId)) : ''}):<br><i>“${esc(fr.r.text)}”</i></div>`;
   const uses = usesOf(sel.id);
-  const types = Object.keys(CTX).filter(t => t !== 'note' || isAN());
+  const types = ['note', 'meeting'].filter(t => t !== 'note' || isAN()).filter(t => t !== 'meeting' || meetingsOn() || true);
   return `${banner()}<div class="crumbs"><a href="${L('')}">Dashboard</a> / <a href="${L('/cat/' + c.id)}">${esc(c.name)}</a> / ${esc(p.name)}</div>
   <div class="pagehead"><div><h1>${esc(p.name)}</h1><p>${vs.length} version${vs.length === 1 ? '' : 's'}${cx.draft ? '' : ' as of ' + cx.label}</p></div>
     <div class="actions"><button class="btn" data-act="go-cmp" data-id="${id}" ${cmp.length < 2 ? 'disabled' : ''}>Compare ${cmp.length ? '(' + cmp.length + ')' : ''}</button>
@@ -479,27 +578,28 @@ function viewPlot(id) {
 }
 
 function usageCard(u) {
-  const rs = u.reviews, pend = rs.filter(r => !r.none && r.status === 'pending').length, res = rs.filter(r => !r.none && r.status === 'resolved').length;
-  const locked = u.type === 'note' && !u.anvId;          // reviewer comments need a published AN version
-  const detail = u.type === 'note'
+  const rs = u.reviews, pend = rs.filter(r => !r.none && r.status === 'pending').length, res = rs.filter(r => !r.none && r.status === 'resolved').length, note = u.type === 'note';
+  const locked = note && !u.anvId;          // AN review comments need a published AN version
+  const detail = note
     ? `<span class="meta">${u.anVer ? esc(u.anVer) : ''}</span>`
-    : `<span class="meta">${u.date ? fmtDay(u.date) + ' · ' : ''}${u.title ? esc(u.title) + ' · ' : ''}${u.link ? `<a href="${esc(u.link)}" target="_blank" rel="noopener noreferrer">Open slides ↗</a>` : ''}</span>`;
+    : `<span class="meta">${u.date ? fmtDay(u.date) + ' · ' : ''}${u.link ? `<a href="${esc(u.link)}" target="_blank" rel="noopener noreferrer">Open slides ↗</a>` : ''}</span>`;
   const status = locked ? '' : !rs.length ? '<span class="badge">No feedback recorded yet</span>'
     : `${pend ? `<span class="badge pending">${pend} pending</span>` : ''}${res ? `<span class="badge resolved">${res} resolved</span>` : ''}${!pend && !res ? '<span class="badge">No comments so far</span>' : ''}`;
   const reviews = rs.map(r => {
-    const rv = r.resolvedVersionId ? ver(r.resolvedVersionId) : null;
+    const rv = r.resolvedVersionId ? ver(r.resolvedVersionId) : null, [cls, label] = stateOf(r.status, r.answer);
     const act = r.none ? `<button class="btn sm" data-act="edit-rv" data-id="${r.id}">Add comment</button>`
       : r.status === 'pending' ? `<button class="btn sm primary" data-act="resolve" data-id="${r.id}">Mark resolved</button><button class="btn sm" data-act="edit-rv" data-id="${r.id}">Edit</button>`
       : `<button class="btn sm" data-act="reopen" data-id="${r.id}">Reopen</button>`;
     return `<div class="rv"><div><div class="who">${esc(whoStr(r))} <span class="meta">· ${fmtDate(r.created)}</span></div>
-      ${r.none ? '<div class="txt none">No comments so far</div>' : `<div class="txt">${esc(r.text)}</div>`}</div>
-      <div class="ra">${r.none ? '' : `<span class="badge ${r.status}">${r.status === 'resolved' ? '✓ Resolved' : 'Pending'}</span>`}${act}<button class="iconbtn" data-act="del-rv" data-id="${r.id}" title="Delete">🗑</button></div>
+      ${r.none ? '<div class="txt none">No comments so far</div>' : `<div class="txt">${esc(r.text)}</div>`}${r.none ? '' : anchorLine(r, 'rev')}</div>
+      <div class="ra">${r.none ? '' : `<span class="badge ${cls}">${label}</span>`}${act}<button class="iconbtn" data-act="del-rv" data-id="${r.id}" title="Delete">🗑</button></div>
+      ${r.none ? '' : `<div style="grid-column:1/-1">${ansBox('rev', r.id, r.answer)}</div>`}
       ${r.status === 'resolved' && !r.none ? `<div class="res">${rv ? `Updated plot saved as <a href="${L('/plot/' + rv.plotId)}" data-act="selver" data-id="${rv.id}"><b>${verLabel(rv)}</b></a> ${ctxChip(rv.anvId)} <span class="mono">${esc(rv.fileName)}</span><br>` : ''}${esc(r.resolution || '')}</div>` : ''}</div>`;
   }).join('');
-  return `<div class="card ucard ${u.type}"><div class="uh"><div><div class="ti">${esc(useTitle(u))}</div>${detail}</div>
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${status}${locked ? '' : `<button class="btn sm" data-act="add-rv" data-id="${u.id}">+ ${u.type === 'note' ? 'Reviewer' : 'Meeting'} feedback</button>`}
+  return `<div class="card ucard ${kindOf(u.type)}"><div class="uh"><div><div class="ti">${esc(useTitle(u))}</div>${detail}</div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${status}${locked ? '' : `<button class="btn sm" data-act="add-rv" data-id="${u.id}">+ ${note ? 'Convener' : 'Meeting'} comment</button>`}
     <button class="iconbtn" data-act="edit-use" data-id="${u.id}" title="Edit">✎</button>${u.anvId ? '' : `<button class="iconbtn" data-act="del-use" data-id="${u.id}" title="Remove">🗑</button>`}</div></div>
-    ${locked ? '<div class="rv"><div class="hint">Reviewer comments can be recorded once this figure is part of a published AN version. Publish a version from <b>AN versions</b>.</div></div>' : ''}${reviews}</div>`;
+    ${locked ? '<div class="rv"><div class="hint">Comments from the convenors can be recorded once this figure is part of a published AN version. Publish a version from <b>AN versions</b>.</div></div>' : ''}${reviews}</div>`;
 }
 
 function viewCompare(id) {
@@ -523,7 +623,7 @@ function viewCompare(id) {
   const table = sel.length ? `<h2 style="margin:28px 0 10px">What changed between versions</h2><div class="card" style="overflow:auto"><table>
     <tr><th>Version</th><th>Saved</th><th>What changed</th><th>Why</th><th>Dataset / selection</th><th>Used in</th></tr>
     ${sel.map(v => `<tr><td><b>${verLabel(v)}</b></td><td>${fmtDate(v.created)}</td><td class="pre">${esc(v.changes)}</td><td class="pre">${esc(v.motivation) || '—'}</td><td class="pre">${esc(v.dataset) || '—'}</td>
-    <td>${S.usages.filter(u => u.versionId === v.id).map(u => `<span class="badge ${u.type}">${esc(useTitle(u))}${u.anvId ? ' · v' + anv(u.anvId).number : ''}</span>`).join(' ') || '—'}</td></tr>`).join('')}</table></div>` : '';
+    <td>${S.usages.filter(u => u.versionId === v.id).map(u => `<span class="badge ${kindOf(u.type)}">${esc(useTitle(u))}${u.anvId ? ' · v' + anv(u.anvId).number : ''}</span>`).join(' ') || '—'}</td></tr>`).join('')}</table></div>` : '';
   return `${banner()}<div class="crumbs"><a href="${L('')}">Dashboard</a> / <a href="${L('/cat/' + c.id)}">${esc(c.name)}</a> / <a href="${L('/plot/' + id)}">${esc(p.name)}</a> / Compare</div>
   <div class="pagehead"><div><h1>Compare versions</h1><p>${esc(p.name)} — ${sel.length} of max 5 selected</p></div>
     <div class="modes"><button class="${mode === 'side' ? 'on' : ''}" data-act="mode" data-id="side">Side by side</button>
@@ -536,19 +636,20 @@ function viewCompare(id) {
 function viewVersions() {
   if (!isAN()) return notFound();
   const rows = [...S.anv].reverse().map((v, i) => {
-    const us = S.usages.filter(u => u.anvId === v.id), figs = us.filter(u => u.type === 'note'), rv = us.filter(u => u.type === 'note').flatMap(u => u.reviews).filter(r => !r.none);
+    const us = S.usages.filter(u => u.anvId === v.id), figs = us.filter(u => u.type === 'note'), rv = [...us.filter(u => u.type === 'note').flatMap(u => u.reviews).filter(r => !r.none), ...S.anc.filter(c => c.source === 'an' && c.anvId === v.id)];
     const pv = S.versions.filter(x => x.anvId === v.id).length, docs = S.docs.filter(d => d.anvId === v.id).length;
     return `<tr><td><b>AN v${v.number}</b> ${i === 0 ? '<span class="badge ok">latest</span>' : ''}</td><td>${fmtDay(v.published_on)}</td><td>${figs.length}</td><td>${pv}</td>
       <td>${rv.filter(r => r.status === 'pending').length ? `<span class="badge pending">${rv.filter(r => r.status === 'pending').length} pending</span>` : ''}<span class="badge resolved">${rv.filter(r => r.status === 'resolved').length} resolved</span></td><td>${docs}</td>
+      <td>${v.pdf ? `<span class="meta" title="${esc(v.pdf.name)}">${esc(v.pdf.name.length > 24 ? v.pdf.name.slice(0, 22) + '…' : v.pdf.name)}</span><br>` : ''}<button class="btn sm" data-act="open-pdf" data-v="${v.id}">${v.pdf ? 'Open' : 'Open / record'}</button></td>
       <td class="pre">${esc(v.notes) || '<span class="meta">—</span>'}</td>
       <td style="white-space:nowrap"><button class="btn sm" data-act="open-anv" data-id="${v.id}">Open</button> <button class="btn sm" data-act="edit-anv" data-id="${v.id}">Edit</button></td></tr>`;
   }).join('');
-  const draftN = S.versions.filter(v => !v.anvId).length, draftU = S.usages.filter(u => !u.anvId).length, next = (S.anv.length ? latestAnv().number : 0) + 1;
+  const draftN = S.versions.filter(v => !v.anvId).length, draftU = S.usages.filter(u => !u.anvId && u.type === 'note').length, next = (S.anv.length ? latestAnv().number : 0) + 1;
   return `<div class="pagehead"><div><h1>AN versions</h1><p>${esc(S.an.an_name)} · ${esc(S.an.collaboration)}. Each published version keeps its own plots, comments and documents.</p></div>
     <div class="actions"><button class="btn primary" data-act="publish">${S.anv.length ? `Publish AN v${next}` : 'Publish first version'}</button></div></div>
   <div class="card pad" style="margin-bottom:20px"><b>Working draft:</b> ${draftN} new plot version${draftN === 1 ? '' : 's'} and ${draftU} record${draftU === 1 ? '' : 's'} not yet in a published version. ${S.anv.length ? '' : 'Publishing creates AN v1 and unlocks reviewer comments.'}
     <button class="link" data-act="to-draft-dash">View working draft</button></div>
-  ${S.anv.length ? `<div class="card" style="overflow:auto"><table class="vtable"><tr><th>Version</th><th>Published</th><th>Figures</th><th>Plot versions</th><th>Reviewer comments</th><th>Documents</th><th>Notes</th><th></th></tr>${rows}</table></div>`
+  ${S.anv.length ? `<div class="card" style="overflow:auto"><table class="vtable"><tr><th>Version</th><th>Published</th><th>Figures</th><th>Plot versions</th><th>Reviewer comments</th><th>Documents</th><th>AN PDF</th><th>Notes</th><th></th></tr>${rows}</table></div>`
     : '<div class="card empty">No AN version has been published yet. While the AN is being written, work happens in the working draft.</div>'}`;
 }
 function publishModal(editV) {
@@ -556,17 +657,18 @@ function publishModal(editV) {
   openModal({title: `Publish AN v${next}`, submit: `Publish v${next}`, wide: true,
     sub: `This creates a new AN version record. The ${dn} plot version${dn === 1 ? '' : 's'} and ${du} record${du === 1 ? '' : 's'} in your working draft become part of it. Earlier versions are not changed.`,
     body: `<div class="cols">${field('Version number', `<input type="text" name="number" value="${next}" inputmode="numeric">`)}${field('Publication date', `<input type="date" name="published_on" value="${today()}">`)}</div>`
-      + field('Notes', '<textarea name="notes" placeholder="e.g. Addressed ARC comments; new systematics table."></textarea>', '', true)
+      + field('Notes', '<textarea name="notes" placeholder="e.g. Addressed ARC comments; new systematics table."></textarea>', '', true) + pdfField()
       + (prev ? `<label style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" name="carry" checked style="margin-top:4px"><span>Carry over Analysis Note figures from AN v${prev.number} that I haven't re-assigned <span class="meta">(each uses its plot's latest version; reviewer comments are not copied)</span></span></label>` : ''),
     onSubmit: async fd => {
       const n = parseInt(fd.get('number'), 10); if (!(n >= 1)) throw new Error('Version number must be a positive whole number');
-      const r = await api('POST', aurl('/versions'), {number: n, published_on: fd.get('published_on') || today(), notes: fd.get('notes').trim(), carry_figures: !!fd.get('carry')});
+      const r = await api('POST', aurl('/versions'), {number: n, published_on: fd.get('published_on') || today(), notes: fd.get('notes').trim(), carry_figures: !!fd.get('carry'), pdf: await pdfFingerprint(fd.get('pdf'))});
       await loadAnalysis(S.an.id); setCtx(r.id); toast(`AN v${r.number} published${r.carried ? ` — ${r.carried} figure(s) carried over` : ''}`); go(L('')); render();
     }});
 }
 function editAnvModal(v) {
-  openModal({title: `Edit AN v${v.number}`, body: field('Publication date', `<input type="date" name="published_on" value="${esc(v.published_on)}">`) + field('Notes', `<textarea name="notes">${esc(v.notes)}</textarea>`, '', true),
-    onSubmit: async fd => { await api('PATCH', aurl('/versions/' + v.id), {published_on: fd.get('published_on'), notes: fd.get('notes')}); await reload(); }});
+  openModal({title: `Edit AN v${v.number}`, body: field('Publication date', `<input type="date" name="published_on" value="${esc(v.published_on)}">`) + field('Notes', `<textarea name="notes">${esc(v.notes)}</textarea>`, '', true)
+      + pdfField(v.pdf ? `Recorded: ${esc(v.pdf.name)} (${(v.pdf.size / 1048576).toFixed(1)} MB). Choose a file only to replace it.` : undefined),
+    onSubmit: async fd => { const b = {published_on: fd.get('published_on'), notes: fd.get('notes')}; const p = await pdfFingerprint(fd.get('pdf')); if (p) b.pdf = p; await api('PATCH', aurl('/versions/' + v.id), b); await reload(); }});
 }
 
 /* ---- documents ---- */
@@ -606,15 +708,24 @@ function viewSettings() {
     ${a.owner === U.id ? '<div class="danger-zone"><h3>Delete this analysis</h3><p class="meta">Removes all of its plots, comments, versions and documents from the repository (they remain in git history).</p><button class="btn danger" data-act="del-an">Delete analysis…</button></div>' : '<div class="note-box">Only the owner can edit the analysis settings or delete it. Everyone in the group can add plots and comments.</div>'}
   </div>`;
 }
-function editAnModal(upgrade) {
+function editAnModal() {
   const a = S.an;
-  openModal({title: upgrade ? 'Move to AN stage' : 'Edit analysis', submit: 'Save', sub: upgrade ? 'Provide the Analysis Note details. The AN starts as “being written”; publish versions from the AN versions page.' : '',
-    body: field('Analysis title', `<input type="text" name="title" required maxlength="150" value="${esc(a.title)}">`) + (isAN() || upgrade ? anFields(a, true) : ''),
-    setup: f => { if (upgrade) { f.an_name.required = f.collaboration.required = true; } },
+  openModal({title: 'Edit analysis', submit: 'Save',
+    body: field('Analysis title', `<input type="text" name="title" required maxlength="150" value="${esc(a.title)}">`) + (isAN() ? anFields(a, true) : ''),
     onSubmit: async fd => {
-      const b = {title: fd.get('title').trim(), stage: upgrade ? 'an_stage' : a.stage};
+      const b = {title: fd.get('title').trim(), stage: a.stage};
       if (b.stage === 'an_stage') Object.assign(b, {an_name: fd.get('an_name').trim(), collaboration: fd.get('collaboration').trim(), an_status: a.an_status || 'being_written'});
-      await api('PATCH', aurl(''), b); await reload(); if (upgrade) toast('Moved to the AN stage');
+      await api('PATCH', aurl(''), b); await reload();
+    }});
+}
+function moveToAnModal() {
+  const a = S.an;
+  openModal({title: 'Move to the AN stage', submit: 'Move to AN stage', wide: true,
+    sub: 'Tell the tracker about your Analysis Note. If a version is already published, add it now; otherwise you can publish it later from “AN versions”.',
+    body: anStageFields(), setup: f => bindAnStage(f, false),
+    onSubmit: async fd => {
+      await api('PATCH', aurl(''), {title: a.title, stage: 'an_stage', ...(await anStageBody(fd))});
+      await loadAnalysis(S.an.id); if (isPub()) setCtx(latestAnv().id); toast('Moved to the AN stage'); go(L('')); render();
     }});
 }
 
@@ -631,16 +742,18 @@ function render() {
     if (!s[0]) h = viewDash();
     else if (s[0] === 'cat') h = viewCat(s[1]);
     else if (s[0] === 'plot') h = s[2] === 'compare' ? viewCompare(s[1]) : viewPlot(s[1]);
-    else if (s[0] === 'meetings') h = viewMeetings(s[1]);
+    else if (s[0] === 'meetings') h = viewMeetings();
     else if (s[0] === 'reviewer') h = viewReviewer();
     else if (s[0] === 'pending') h = viewPending();
     else if (s[0] === 'versions') h = viewVersions();
     else if (s[0] === 'docs') h = viewDocs();
     else if (s[0] === 'settings') h = viewSettings();
+    else if (s[0] === 'pdf') h = PDF.viewPdf(s[1]);
     else h = notFound();
   }
   $('#main').innerHTML = h;
   hydrateImages();
+  if (r[0] === 'a' && S && r[2] === 'pdf') PDF.mountPdf();
 }
 
 /* ============================ forms ============================ */
@@ -686,6 +799,13 @@ function newVersionModal(pid) {
     }});
 }
 
+const meetingNames = () => [...new Set([...S.usages.filter(x => x.type !== 'note').map(meetingName), ...S.anc.filter(c => c.source === 'meeting').map(c => c.meeting)])];
+function meetingFields(u = {}) {
+  return `<datalist id="mnames">${meetingNames().map(n => `<option value="${esc(n)}">`).join('')}</datalist>`
+    + field('Meeting name', `<input type="text" name="title" list="mnames" required maxlength="150" value="${esc(u.title || (u.type ? meetingName(u) : ''))}" placeholder="e.g. TMP, Top group meeting, Higgs weekly">`, 'Type the name of the meeting or group. Names you used before are suggested.')
+    + `<div class="cols">${field('Date', `<input type="date" name="date" required value="${esc(u.date || today())}">`)}${field('Slide number', `<input type="text" name="slide" maxlength="40" value="${esc(u.slide || '')}" placeholder="e.g. 12">`, '', true)}</div>`
+    + field('Link to the slides', `<input type="url" name="link" maxlength="500" value="${esc(u.link || '')}" placeholder="https://docs.google.com/presentation/…">`, '', true);
+}
 function useFields(type, u = {}) {
   if (type === 'note') {
     const figs = [...new Set(S.usages.filter(x => x.type === 'note').map(x => x.fig))];
@@ -693,18 +813,32 @@ function useFields(type, u = {}) {
       + field('Figure number in the Analysis Note', `<input type="text" name="fig" list="figs" required maxlength="40" value="${esc(u.fig || '')}" placeholder="e.g. 4.2">`, 'Type a number or pick one used before.')
       + field('Analysis Note draft / version', `<input type="text" name="an_ver" maxlength="40" value="${esc(u.anVer || '')}" placeholder="e.g. v3">`, '', true);
   }
-  return field('Google Slides link', `<input type="url" name="link" required maxlength="500" value="${esc(u.link || '')}" placeholder="https://docs.google.com/presentation/…">`)
-    + `<div class="cols">${field('Slide number', `<input type="text" name="slide" required maxlength="40" value="${esc(u.slide || '')}" placeholder="e.g. 12">`)}${field('Meeting date', `<input type="date" name="date" required value="${esc(u.date || today())}">`)}</div>`
-    + field('Meeting title', `<input type="text" name="title" maxlength="150" value="${esc(u.title || '')}" placeholder="e.g. TMP weekly #42">`, '', true);
+  return meetingFields(u);
 }
 function useModal(vid, type, u) {
-  const v = ver(vid) || ver(u.versionId), p = plot(v.plotId), t = type || u.type, cx = ctx();
-  openModal({title: `${u ? 'Edit' : 'Add'} · ${CTX[t].label}`, sub: `${esc(p.name)} ${verLabel(v)} · recorded in ${u ? (u.anvId ? anvLabel(anv(u.anvId)) : 'the working draft') : (cx.draft ? 'the working draft' : cx.label)}`, body: useFields(t, u || {}),
+  const v = ver(vid) || ver(u.versionId), p = plot(v.plotId), t = type || u.type, cx = ctx(), note = t === 'note';
+  openModal({title: `${u ? 'Edit' : 'Add'} · ${note ? 'Analysis Note figure' : 'plot shown in a meeting'}`, wide: !note,
+    sub: `${esc(p.name)} ${verLabel(v)}${note ? ` · recorded in ${u ? (u.anvId ? anvLabel(anv(u.anvId)) : 'the working draft') : (cx.draft ? 'the working draft' : cx.label)}` : ''}`, body: useFields(t, u || {}),
     onSubmit: async fd => {
-      const d = t === 'note' ? {fig: fd.get('fig').trim(), an_ver: fd.get('an_ver').trim()} : {link: fd.get('link').trim(), slide: fd.get('slide').trim(), date: fd.get('date'), title: fd.get('title').trim()};
-      await (u ? api('PATCH', aurl('/usages/' + u.id), d) : api('POST', aurl('/usages'), {plot_version_id: vid, type: t, an_version_id: cx.id, ...d})); await reload();
+      const d = note ? {fig: fd.get('fig').trim(), an_ver: fd.get('an_ver').trim()} : {title: fd.get('title').trim(), link: fd.get('link').trim(), slide: fd.get('slide').trim(), date: fd.get('date')};
+      await (u ? api('PATCH', aurl('/usages/' + u.id), d) : api('POST', aurl('/usages'), {plot_version_id: vid, type: t, an_version_id: note ? cx.id : null, ...d})); await reload();
     }});
 }
+/* a plot that was shown in a meeting, chosen from the plots list (instead of going through the plot page) */
+function meetingPlotModal() {
+  const plots = visPlots(); if (!plots.length) { toast('Add a plot first, then record that it was shown in a meeting.', 'err'); return; }
+  openModal({title: 'Plot shown in a meeting', wide: true, submit: 'Add', sub: 'Choose the plot and version you showed, then describe the meeting. You can add the comments afterwards.',
+    body: `<div class="cols">${field('Plot', `<select name="plot">${plots.map(p => `<option value="${p.id}">${esc(cat(p.catId)?.name || '')} — ${esc(p.name)}</option>`).join('')}</select>`)}${field('Version', '<select name="ver"></select>')}</div>` + meetingFields(),
+    setup: f => {
+      const fill = () => { f.ver.innerHTML = [...verOf(f.plot.value)].reverse().map(v => `<option value="${v.id}">${verLabel(v)} — ${esc(v.summary)}</option>`).join(''); };
+      f.plot.addEventListener('change', fill); fill();
+    },
+    onSubmit: async fd => {
+      const r = await api('POST', aurl('/usages'), {plot_version_id: fd.get('ver'), type: 'meeting', an_version_id: null, title: fd.get('title').trim(), link: fd.get('link').trim(), slide: fd.get('slide').trim(), date: fd.get('date')});
+      await reload(); toast('Added. Use “+ Meeting comment” on the new card to record what was said.');
+    }});
+}
+
 function reviewModal(u, r) {
   const t = u.type, has = r && !r.none;
   openModal({title: r ? 'Edit feedback' : 'Add feedback', sub: esc(useTitle(u)), submit: 'Save',
@@ -727,7 +861,7 @@ function reviewModal(u, r) {
 function whoCode(r) { return r.name ? slug(r.name.replace(/\./g, ''), 10) : r.role.split(/\s+/).map(w => /\d/.test(w) ? w : w[0].toUpperCase()).join(''); }
 function resolveModal(u, r) {
   const v = ver(u.versionId), p = plot(v.plotId), idx = u.reviews.filter(x => !x.none).indexOf(r) + 1;
-  const ctxPart = u.type === 'note' ? 'AN-Fig' + slug(u.fig, 8) : CTX[u.type].short + (u.slide ? '-s' + slug(u.slide, 6) : '');
+  const ctxPart = u.type === 'note' ? 'AN-Fig' + slug(u.fig, 8) : slug(meetingName(u), 10) + (u.slide ? '-s' + slug(u.slide, 6) : '');
   const base = `${slug(p.name, 24)}_v${v.num}_${ctxPart}_${whoCode(r)}-c${idx}`;
   const nextRev = Math.max(0, ...S.versions.filter(x => x.plotId === p.id && x.num === v.num).map(x => x.rev)) + 1;
   openModal({title: 'Mark as resolved', wide: true, submit: 'Resolve', sub: `<b>${esc(whoStr(r))}</b>: “${esc(r.text)}”`,
@@ -748,6 +882,108 @@ function resolveModal(u, r) {
         toast('Resolved — updated plot saved in the working draft');
       } else { await api('POST', aurl(`/reviews/${r.id}/resolve`), {mode: 'noplot', note: fd.get('note').trim()}); toast('Marked as resolved'); }
       await reload();
+    }});
+}
+
+/* ---- comments on the AN text (not tied to a plot) ---- */
+function ancModal(c, source) {
+  const cx = ctx(), src = c ? c.source : (source || 'an'), meet = src === 'meeting';
+  openModal({title: c ? 'Edit comment' : meet ? 'Add a methodology comment from a meeting' : 'Add comment on the AN', sub: meet ? 'A suggestion or question that is not about one specific plot.' : `Recorded under ${cx.label}`, wide: true, submit: 'Save',
+    body: (meet ? `<datalist id="mnames">${meetingNames().map(n => `<option value="${esc(n)}">`).join('')}</datalist><div class="cols">${field('Meeting name', `<input type="text" name="meeting" list="mnames" required maxlength="100" value="${esc(c?.meeting || '')}" placeholder="e.g. TMP, Top group meeting">`)}${field('Meeting date', `<input type="date" name="meeting_date" value="${esc(c?.meeting_date || today())}">`)}</div>` : '')
+      + `<div class="cols">${field(meet ? 'Who commented' : 'Kind of reviewer', `<select name="role">${CTX[meet ? 'meeting' : 'note'].roles.map(x => `<option ${c?.role === x ? 'selected' : ''}>${x}</option>`).join('')}</select>`)}${field('Name', `<input type="text" name="name" maxlength="100" value="${esc(c?.name || '')}">`, '', true)}</div>`
+      + `<div class="cols">${field('Kind', `<select name="kind">${Object.entries(COMMENT_KINDS).map(([k, l]) => `<option value="${k}" ${(c?.kind || (meet ? 'general' : 'text')) === k ? 'selected' : ''}>${l}</option>`).join('')}</select>`)}${field(meet ? 'Where (slide, topic)' : 'Where in the AN?', `<input type="text" name="location" maxlength="80" value="${esc(c?.location || '')}" placeholder="${meet ? 'e.g. slide 8, trigger' : 'e.g. Sec 3.1, Tab 10, L390, General'}">`, '', true)}</div>`
+      + field('Comment', `<textarea name="text" required maxlength="5000" style="min-height:120px">${esc(c?.text || '')}</textarea>`),
+    onSubmit: async fd => {
+      const b = {role: fd.get('role'), name: fd.get('name').trim(), kind: fd.get('kind'), location: fd.get('location').trim(), text: fd.get('text').trim()};
+      if (meet) { b.meeting = fd.get('meeting').trim(); b.meeting_date = fd.get('meeting_date') || ''; }
+      await (c ? api('PATCH', aurl('/an-comments/' + c.id), b) : api('POST', aurl('/an-comments'), {source: src, an_version_id: meet ? null : cx.id, ...b})); await reload();
+    }});
+}
+function resolveAncModal(c) {
+  const later = c.anvId ? S.anv.filter(v => v.number > anv(c.anvId).number) : [];
+  openModal({title: 'Mark as resolved', wide: true, sub: `<b>${esc(whoStr(c))}</b>${c.location ? ' · ' + esc(c.location) : ''}: “${esc(c.text.length > 220 ? c.text.slice(0, 220) + '…' : c.text)}”`, submit: 'Resolve',
+    body: field('What did you change? (optional if your answer says it all)', '<textarea name="note" maxlength="3000" placeholder="e.g. Added a paragraph in Sec 1.1 explaining the choice of y0."></textarea>', 'Your reply to the commenter goes in the “Your answer” box on the comment.')
+      + field('Fixed in', `<select name="in"><option value="">Not in a published version yet</option>${S.anv.map(v => `<option value="${v.id}" ${later[0] && later[0].id === v.id ? 'selected' : ''}>${anvLabel(v)}</option>`).join('')}</select>`, 'Which published AN version contains the fix, if any.', true),
+    onSubmit: async fd => { await api('POST', aurl(`/an-comments/${c.id}/resolve`), {note: fd.get('note').trim() || (c.answer || 'Resolved').slice(0, 3000), resolved_in: fd.get('in') || null}); await reload(); }});
+}
+
+/* ---- a point-by-point reply built from your answers, to paste into an email ---- */
+function replyModal() {
+  const c = ctx(); if (c.draft) return;
+  const figs = cNotes().sort((a, b) => a.fig.localeCompare(b.fig, undefined, {numeric: true}));
+  const q = (label, who, text, ans, extra) => `${label}${who ? ' (' + who + ')' : ''}:\n${text}\n→ ${ans && ans.trim() ? ans.trim() : '[no answer written yet]'}${extra ? '\n  (' + extra + ')' : ''}`;
+  const parts = [];
+  S.anc.filter(x => x.source === 'an' && x.anvId === c.id).forEach(x => parts.push(q((x.location || COMMENT_KINDS[x.kind] || 'Comment'), x.name, x.text, x.answer, x.status === 'resolved' && x.resolvedIn && anv(x.resolvedIn) ? 'addressed in ' + anvLabel(anv(x.resolvedIn)) : '')));
+  figs.forEach(u => u.reviews.filter(r => !r.none).forEach(r => { const rv = r.resolvedVersionId ? ver(r.resolvedVersionId) : null; parts.push(q('Fig ' + u.fig, r.name, r.text, r.answer, rv ? 'updated plot: ' + rv.fileName : '')); }));
+  const text = `Reply to the comments on ${S.an.an_name || S.an.title} ${anvLabel(c.v)}\n\n` + parts.map((t, i) => `${i + 1}. ${t}`).join('\n\n');
+  openModal({title: 'Reply document', xl: true, submit: 'Copy to clipboard', sub: `${parts.length} comment${parts.length === 1 ? '' : 's'} with your answers. Edit freely, then copy it into your email.`,
+    body: `<textarea id="replytxt" style="width:100%;min-height:380px;font:13.5px/1.5 ui-monospace,monospace;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg)">${esc(text)}</textarea>`,
+    onSubmit: async () => { try { await navigator.clipboard.writeText($('#replytxt').value); toast('Copied'); } catch { $('#replytxt').select(); toast('Press Ctrl+C to copy', '', 4000); return false; } }});
+}
+
+/* ---- import comments from a pasted e-mail ---- */
+function importModal(mode) {
+  const cx = ctx(), isNote = mode === 'note';
+  if (isNote && cx.draft) { toast('Select a published AN version in the “Viewing” menu first: AN comments belong to a version.', 'err', 6000); return; }
+  const key = u => parseFloat(isNote ? u.fig : u.slide) || 0;
+  // figures: those of the version being viewed. meetings: every plot record of any meeting, newest first
+  const targets = isNote ? cNotes().sort((a, b) => key(a) - key(b)) : meetingUses().sort((a, b) => (b.date || '').localeCompare(a.date || '') || b.created - a.created);
+  const roles = CTX[isNote ? 'note' : 'meeting'].roles;
+  const tgtLabel = u => { const v = ver(u.versionId); return isNote ? `Fig ${u.fig} — ${plot(v.plotId).name} ${verLabel(v)}`
+    : `slide ${u.slide || '?'} · ${meetingName(u)} ${fmtDay(u.date)} — ${plot(v.plotId).name} ${verLabel(v)}`; };
+  const normFig = s => String(s).toLowerCase().replace(/^fig(ure)?\.?\s*/, '').trim();
+  const guess = it => {
+    if (isNote) { if (it.figs.length === 1) { const u = targets.find(x => normFig(x.fig) === it.figs[0]); if (u) return u.id; } return 'an'; }
+    if (it.slides.length === 1) {
+      const mn = ($('#imeet')?.value || '').trim().toLowerCase(), hit = targets.filter(x => String(x.slide).trim() === it.slides[0]);
+      const u = hit.find(x => mn && meetingName(x).toLowerCase() === mn) || hit[0]; if (u) return u.id;
+    }
+    return 'text';
+  };
+  let rows = [], ignored = [];
+  const opt = (v, l, cur) => `<option value="${v}" ${v === cur ? 'selected' : ''}>${esc(l)}</option>`;
+  const tgtOpts = cur => opt(isNote ? 'an' : 'text', isNote ? 'Text / table / methodology (not a plot)' : 'Methodology / general (not a plot)', cur) + targets.map(u => opt(u.id, tgtLabel(u), cur)).join('');
+  openModal({title: isNote ? `Import comments from the convenors · ${cx.label}` : 'Import comments from a meeting', xl: true, submit: 'Import ticked comments',
+    sub: 'Paste the whole email. The text is split into separate comments here in your browser; nothing is saved until you click Import.',
+    body: (isNote ? '' : `<datalist id="mnames">${meetingNames().map(n => `<option value="${esc(n)}">`).join('')}</datalist><div class="cols">${field('Meeting name', '<input type="text" name="meeting" id="imeet" list="mnames" required maxlength="100" placeholder="e.g. TMP, Top group meeting">')}${field('Meeting date', `<input type="date" name="meeting_date" value="${today()}">`)}</div>`)
+      + `<div class="cols">${field(isNote ? 'Kind of reviewer' : 'Who commented', `<select name="role">${roles.map(x => `<option>${x}</option>`).join('')}</select>`)}${field('Name', '<input type="text" name="name" id="iname" maxlength="100" placeholder="filled from the email when possible">', '', true)}</div>`
+      + field('Email text', '<textarea name="email" id="iemail" rows="7" placeholder="Paste the email here (Ctrl+V), then click “Read comments”."></textarea>')
+      + '<div><button type="button" class="btn" id="iparse">Read comments</button></div><div id="iprev"></div>',
+    setup: f => {
+      const sync = () => f.querySelectorAll('.irow').forEach(el => { const i = +el.dataset.i, r = rows[i]; if (!r) return; r.include = $('.ichk', el).checked; r.location = $('.iloc', el).value; r.target = $('.itgt', el).value; r.text = $('.itxt', el).value; });
+      f._sync = sync;
+      const draw = () => {
+        const nOn = rows.filter(r => r.include).length, nFig = rows.filter(r => r.target !== 'an' && r.target !== 'text').length;
+        $('#iprev', f).innerHTML = rows.length || ignored.length ? `<div class="isum"><b>${rows.length}</b> comment${rows.length === 1 ? '' : 's'} found · <b>${nOn}</b> ticked · <b>${nFig}</b> matched to a ${isNote ? 'figure' : 'slide'}
+          <span style="margin-left:auto"><button type="button" class="link" data-all="1">Tick all</button> · <button type="button" class="link" data-all="0">Untick all</button></span></div>
+        ${rows.map((r, i) => `<div class="irow ${r.include ? '' : 'off'}" data-i="${i}"><input type="checkbox" class="ichk" ${r.include ? 'checked' : ''} aria-label="Import this comment"><div class="ibody"><div class="irow1"><input class="iloc" value="${esc(r.location)}" placeholder="Location, e.g. Sec 3.1" maxlength="80"><select class="itgt">${tgtOpts(r.target)}</select>${r.note ? `<span class="badge">${esc(r.note)}</span>` : ''}</div><textarea class="itxt" rows="3" maxlength="5000">${esc(r.text)}</textarea></div></div>`).join('')}
+        ${ignored.length ? `<details class="ign"><summary>${ignored.length} ignored part${ignored.length === 1 ? '' : 's'} (greetings, cover note, sign-off)</summary>${ignored.map((g, i) => `<div class="ign1"><span class="meta">${esc(g.reason)}</span><div>${esc(g.text.length > 300 ? g.text.slice(0, 300) + '…' : g.text)}</div><button type="button" class="btn sm" data-ign="${i}">Add as comment</button></div>`).join('')}</details>` : ''}` : '<div class="empty">No comments found. Check the pasted text.</div>';
+      };
+      const parse = () => {
+        const r = parseEmail($('#iemail', f).value);
+        rows = r.items.map(it => ({...it, target: guess(it), include: it.include})); ignored = r.ignored;
+        if (r.from && !$('#iname', f).value) $('#iname', f).value = r.from;
+        draw();
+      };
+      $('#iparse', f).onclick = parse;
+      $('#iemail', f).addEventListener('paste', () => setTimeout(parse, 50));
+      f.addEventListener('change', e => { const row = e.target.closest('.irow'); if (row) { sync(); row.classList.toggle('off', !rows[+row.dataset.i].include); } });
+      f.addEventListener('click', e => {
+        const all = e.target.closest('[data-all]'), ign = e.target.closest('[data-ign]');
+        if (all) { sync(); rows.forEach(r => { r.include = all.dataset.all === '1'; }); draw(); }
+        if (ign) { sync(); const g = ignored.splice(+ign.dataset.ign, 1)[0], it = {text: g.text, location: '', raw: g.text, figs: [], slides: [], note: ''}; rows.push({...it, target: guess(it), include: true}); draw(); }
+      });
+      f._rows = () => rows;
+    },
+    onSubmit: async (fd, f) => {
+      f._sync(); const picked = f._rows().filter(r => r.include);
+      if (!picked.length) throw new Error('Paste the email, click “Read comments”, and tick the comments you want to import.');
+      if (picked.some(r => !r.text.trim())) throw new Error('A ticked comment has no text. Fill it in or untick it.');
+      const items = picked.map(r => ({text: r.text.trim(), location: r.location.trim(), target: r.target, kind: kindOfLoc(r.location)}));
+      const b = {mode: isNote ? 'an' : 'meeting', an_version_id: isNote ? cx.id : null, role: fd.get('role'), name: fd.get('name').trim(), items};
+      if (!isNote) { b.meeting = fd.get('meeting').trim(); b.meeting_date = fd.get('meeting_date') || ''; }
+      const res = await api('POST', aurl('/import-comments'), b);
+      await reload(); toast(`Imported ${items.length} comment${items.length === 1 ? '' : 's'} (${res.an} not about a plot, ${res.reviews} on plots)`, '', 5000);
     }});
 }
 
@@ -803,6 +1039,20 @@ const A = {
   'add-use': el => useModal(el.dataset.id, el.dataset.type),
   'edit-use': el => useModal(null, null, S.usages.find(u => u.id === el.dataset.id)),
   'del-use': el => confirmBox('Remove', 'Remove this record and its feedback?', 'Remove', async () => { await api('DELETE', aurl('/usages/' + el.dataset.id)); await reload(); }),
+  'import-email': el => importModal(el.dataset.type),
+  'open-pdf': el => PDF.open(el), pdf: el => PDF.act(el),
+  'to-review': el => { setCtx(el.dataset.id); go(L('/reviewer')); render(); },
+  'to-an': () => moveToAnModal(),
+  'presented-yes': async () => { await api('POST', aurl('/presented'), {value: true}); await reload(); go(L('/meetings')); },
+  'comments-yes': () => commentsChooser(),
+  'comments-no': () => { (ui.hideAsk = ui.hideAsk || {})[S.an.id] = true; render(); },
+  'add-mplot': () => meetingPlotModal(),
+  'add-mcomment': () => ancModal(null, 'meeting'),
+  mfilter: el => { ui.mf = el.dataset.id; render(); }, kfilter: el => { ui.rk = el.dataset.id; render(); },
+  'add-anc': () => ancModal(), 'reply-doc': () => replyModal(), 'edit-anc': el => ancModal(S.anc.find(c => c.id === el.dataset.id)),
+  'resolve-anc': el => resolveAncModal(S.anc.find(c => c.id === el.dataset.id)),
+  'reopen-anc': async el => { await api('POST', aurl(`/an-comments/${el.dataset.id}/reopen`)); await reload(); },
+  'del-anc': el => confirmBox('Delete comment', 'Delete this comment?', 'Delete', async () => { await api('DELETE', aurl('/an-comments/' + el.dataset.id)); await reload(); }),
   'add-rv': el => reviewModal(S.usages.find(u => u.id === el.dataset.id)),
   'edit-rv': el => { const f = findReview(el.dataset.id); reviewModal(f.u, f.r); },
   'del-rv': el => confirmBox('Delete feedback', 'Delete this feedback entry?', 'Delete', async () => { await api('DELETE', aurl('/reviews/' + el.dataset.id)); await reload(); }),
@@ -810,7 +1060,7 @@ const A = {
   reopen: async el => { const f = findReview(el.dataset.id); try { await api('PATCH', aurl('/reviews/' + f.r.id), {role: f.r.role, name: f.r.name, none: false, text: f.r.text, status: 'pending'}); await reload(); } catch (e) { toast(e.message, 'err'); } },
   'new-doc': () => docModal(), 'edit-doc': el => docModal(S.docs.find(d => d.id === el.dataset.id)),
   'del-doc': el => confirmBox('Delete document', 'Delete this document record?', 'Delete', async () => { await api('DELETE', aurl('/documents/' + el.dataset.id)); await reload(); }),
-  'edit-an': () => editAnModal(false), 'to-an': () => editAnModal(true),
+  'edit-an': () => editAnModal(),
   'del-an': () => openModal({title: 'Delete analysis', submit: 'Delete forever', sub: `This permanently deletes <b>${esc(S.an.title)}</b> and everything in it.`,
     body: field('Type the analysis title to confirm', '<input type="text" name="t" autocomplete="off">'),
     onSubmit: async fd => { if (fd.get('t').trim() !== S.an.title) throw new Error('The title does not match'); await api('DELETE', aurl('')); S = null; go('#/'); toast('Analysis deleted'); }}),
@@ -832,6 +1082,17 @@ document.addEventListener('input', e => {
   const t = e.target, st = $('#main .stage');
   if (t.matches('[data-swipe]') && st) st.style.setProperty('--p', t.value + '%');
   if (t.matches('[data-opac]') && st) st.style.setProperty('--o', t.value);
+});
+document.addEventListener('change', async e => {     // "Your answer" boxes save themselves when you click away
+  const t = e.target; if (!t.matches || !t.matches('textarea.ans')) return;
+  const kind = t.dataset.kind, id = t.dataset.id, val = t.value.trim(), saved = t.parentElement.querySelector('.saved');
+  try {
+    await api('POST', aurl(`/${kind === 'anc' ? 'an-comments' : 'reviews'}/${id}/answer`), {answer: val});
+    const item = kind === 'anc' ? S.anc.find(c => c.id === id) : findReview(id)?.r; if (item) { item.answer = val; }
+    const badge = t.closest('.rv')?.querySelector('.ra .badge');
+    if (badge && item && item.status !== 'resolved') { const [cls, label] = stateOf(item.status, val); badge.className = 'badge ' + cls; badge.textContent = label; }
+    saved.textContent = 'Saved ✓'; setTimeout(() => { saved.textContent = ''; }, 2000);
+  } catch (err) { saved.textContent = ''; toast(err.message, 'err'); }
 });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') { $('.lightbox')?.remove(); $('.overlay')?.remove(); $('#results')?.classList.remove('show'); } });
 
@@ -879,8 +1140,15 @@ function drawPlot({title, xl, xr, nb, shape, N = 2e5, logy, ratio, labels, legen
   if (legend) { g.font = '15px sans-serif'; g.textAlign = 'left'; g.fillStyle = '#111'; g.beginPath(); g.arc(W - 220, T + 20, 4, 0, 7); g.fill(); g.fillText('Data', W - 205, T + 25); g.fillStyle = color + 'aa'; g.fillRect(W - 230, T + 38, 20, 12); g.fillStyle = '#111'; g.fillText('Simulation', W - 205, T + 49); }
   return new Promise(r => c.toBlob(b => r(new File([b], 'plot.png', {type: 'image/png'}))));
 }
+let demoRunning = false;
 async function createDemo() {
-  toast('Creating demo analysis… (saved as a single commit)');
+  if (demoRunning) return; demoRunning = true;
+  const hide = busy('Creating the demo analysis… this can take up to a minute on GitHub. Please wait.');
+  try { await createDemoInner(); }
+  catch (e) { console.error(e); toast('Demo could not be created: ' + e.message, 'err', 20000); }
+  finally { hide(); demoRunning = false; }
+}
+async function createDemoInner() {
   let newId = null;
   await batch(async () => {
   const n = AL.filter(a => a.title.startsWith('Demo · Top-Quark')).length, title = 'Demo · Top-Quark Charge Asymmetry' + (n ? ` (${n + 1})` : '');
@@ -901,13 +1169,13 @@ async function createDemo() {
   const use = async (pv, type, d) => (await api('POST', ap('/usages'), {plot_version_id: pv, type, ...d})).id;
   const slides = (slide, days, title) => ({link: 'https://docs.google.com/presentation/d/example', slide, date: new Date(Date.now() - days * 864e5).toISOString().slice(0, 10), title});
   const rv = (uid, b) => api('POST', ap(`/usages/${uid}/reviews`), b);
-  const uTmp = await use(p1v3, 'tmp', slides('12', 20, 'TMP weekly #31'));
-  await rv(uTmp, {role: 'Convener', name: 'L. Rossi', text: 'Bins are too fine above 100 GeV — statistical fluctuations dominate.'});
-  const uGm = await use(p1v3, 'group', slides('5', 14, 'Group meeting'));
-  await rv(uGm, {role: 'Supervisor', none: true});
-  const uIm = await use(p2v2, 'internal', slides('3', 9, 'Internal review'));
-  await rv(uIm, {role: 'Collaborator', name: 'S. Park', text: 'Which ID working point is this?'});
-  await use(p3.version_id, 'collab', slides('8', 5, 'Collaboration meeting'));
+  const uTmp = await use(p1v3, 'meeting', slides('12', 20, 'TMP'));
+  const cm1 = (await rv(uTmp, {role: 'Convener', name: 'L. Rossi', text: 'Bins are too fine above 100 GeV — statistical fluctuations dominate.'})).id;
+  await api('POST', ap(`/reviews/${cm1}/answer`), {answer: 'Will merge the bins above 100 GeV in the next version.'});
+  const uGm = await use(p2v2, 'meeting', slides('3', 9, 'Top group meeting'));
+  await rv(uGm, {role: 'Meeting member', name: 'S. Park', text: 'Which ID working point is this?'});
+  await api('POST', ap('/an-comments'), {source: 'meeting', meeting: 'TMP', meeting_date: slides('12', 20, 'TMP').date, role: 'Convener', name: 'L. Rossi', kind: 'general', location: 'strategy', text: 'Consider also a measurement as a function of the top-pair mass, not only inclusive.'});
+  await use(p3.version_id, 'meeting', slides('8', 5, 'Top group meeting'));
   await use(p1v3, 'note', {fig: '4.2', an_ver: 'draft 2'}); await use(p2v2, 'note', {fig: '4.3', an_ver: 'draft 2'});
   await api('POST', ap('/versions'), {number: 1, published_on: new Date(Date.now() - 12 * 864e5).toISOString().slice(0, 10), notes: 'First public version of the AN.'});
   let st = await api('GET', ap(''));
@@ -921,6 +1189,9 @@ async function createDemo() {
   st = await api('GET', ap(''));
   const v2fig = st.usages.find(u => u.type === 'note' && u.fig === '4.2' && u.an_version_id === st.an_versions[1].id).id;
   await rv(v2fig, {role: 'Reviewer 1', name: 'A. Meyer', text: 'Thanks — please also state the integrated luminosity in the label.'});
+  await api('POST', ap('/an-comments'), {source: 'an', an_version_id: st.an_versions[1].id, role: 'Convener', name: 'L. Jeppe', kind: 'table', location: 'Tab 10', text: 'Are the labels in the “region type” column correct? Please double-check the region definitions.'});
+  const an2 = (await api('POST', ap('/an-comments'), {source: 'an', an_version_id: st.an_versions[1].id, role: 'Convener', name: 'L. Jeppe', kind: 'text', location: 'Sec 1.1', text: 'Explain a bit more the reasoning behind the definition of A_in and A_out.'})).id;
+  await api('POST', ap(`/an-comments/${an2}/answer`), {answer: 'Agreed. We will add a short paragraph with the motivation and how y0 is chosen.'});
   await api('POST', ap('/documents'), {title: 'AN-24-123 v2 (PDF)', kind: 'AN draft', url: 'https://example.org/an-24-123-v2.pdf', an_version_id: st.an_versions[1].id, notes: 'Public version 2.'});
   await api('POST', ap('/documents'), {title: 'Analysis strategy', kind: 'Meeting notes', notes: 'Overall strategy agreed with the supervisor.'});
   });

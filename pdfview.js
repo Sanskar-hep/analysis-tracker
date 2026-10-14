@@ -1,0 +1,214 @@
+/* AN PDF viewer with highlights.
+ * The PDF is opened from the user's computer and never uploaded. What is saved is only where a comment points:
+ * page number + rectangles as fractions of the page (so they line up at any zoom) + the highlighted text.
+ * Uses the app's globals (S, api, aurl, openModal, field, ...) at call time. */
+(function () {
+  'use strict';
+  const PDFV = {vid: null, doc: null, fp: null, match: null, tool: 'text', zoom: 1, placing: null, jump: null, scale: 1, io: null};
+
+  const loadScript = src => new Promise((res, rej) => {
+    if (window.pdfjsLib) return res();
+    const s = document.createElement('script'); s.src = src; s.onload = () => res(); s.onerror = () => rej(new Error('Could not load the PDF viewer files (vendor/pdfjs).')); document.head.appendChild(s);
+  });
+  async function ensureLib() { await loadScript('vendor/pdfjs/pdf.min.js'); pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdfjs/pdf.worker.min.js'; }
+
+  /* everything in this AN version that can point into the PDF */
+  function items(vid) {
+    const out = [];
+    S.anc.filter(c => c.source === 'an' && c.anvId === vid).forEach(c => out.push({kind: 'anc', id: c.id, text: c.text, label: c.location || COMMENT_KINDS[c.kind] || 'Comment', who: whoStr(c), status: c.status, answer: c.answer, anchor: c.anchor}));
+    S.usages.filter(u => u.type === 'note' && u.anvId === vid).forEach(u => u.reviews.filter(r => !r.none).forEach(r => out.push({kind: 'rev', id: r.id, text: r.text, label: 'Fig ' + u.fig, who: whoStr(r), status: r.status, answer: r.answer, anchor: r.anchor})));
+    return out;
+  }
+  const cls = it => it.status === 'resolved' ? 'resolved' : (it.answer || '').trim() ? 'answered' : 'pending';
+
+  async function openFile(file) {
+    await ensureLib();
+    const fp = await pdfFingerprint(file), v = anv(PDFV.vid);
+    const doc = await pdfjsLib.getDocument({data: new Uint8Array(await file.arrayBuffer())}).promise;
+    fp.pages = doc.numPages; PDFV.fp = fp; PDFV.doc = doc; PDFV.match = v.pdf ? v.pdf.sha256 === fp.sha256 : null;
+  }
+
+  /* ---------------- page ---------------- */
+  function viewPdf(vid) {
+    const v = anv(vid); if (!v) return notFound();
+    if (PDFV.vid !== vid) Object.assign(PDFV, {vid, doc: null, fp: null, match: null, placing: null, scroll: 0});
+    const its = items(vid), todo = its.filter(i => !i.anchor), done = its.filter(i => i.anchor);
+    const rec = v.pdf ? `${esc(v.pdf.name)} · ${(v.pdf.size / 1048576).toFixed(1)} MB` : '';
+    const head = `<div class="crumbs"><a href="${L('')}">Dashboard</a> / <a href="${L('/reviewer')}" data-act="to-review" data-id="${vid}">AN review</a> / PDF</div>
+      <div class="pagehead"><div><h1>${anvLabel(v)} · PDF</h1><p>Open the PDF from your computer. It is only shown here, never uploaded. Highlight what the convenors mentioned and attach the comment.</p></div>
+      <div class="actions"><label class="btn primary" style="cursor:pointer">${PDFV.doc ? 'Choose another PDF' : 'Choose the PDF…'}<input id="pdffile" type="file" accept="application/pdf,.pdf" hidden></label></div></div>`;
+    if (!PDFV.doc) return head + `<div class="card empty pdfpick"><p style="margin:0 0 6px"><b>Choose the PDF of ${anvLabel(v)}</b></p><p class="meta" style="margin:0">${rec ? 'Expected file: <span class="mono">' + rec + '</span>. The tracker checks a fingerprint so you open the right one.' : 'No PDF has been recorded for this version yet. The first one you open can be recorded.'}</p></div>`
+      + (its.length ? `<div class="sechead"><h2>Comments waiting to be placed <span class="count">${todo.length}</span></h2></div>${todo.map(i => sideItem(i, false)).join('') || '<div class="card empty">All comments are placed.</div>'}` : '');
+    const warn = PDFV.match === false ? `<div class="banner"><span><b>This is not the recorded file.</b> It differs from ${rec}. Highlights may not line up with the pages.</span><span class="actions"><button class="btn sm" data-act="pdf" data-op="record">Record this file instead</button></span></div>`
+      : PDFV.match === null ? `<div class="banner draft"><span>No PDF is recorded for ${anvLabel(v)} yet.</span><span class="actions"><button class="btn sm primary" data-act="pdf" data-op="record">Record this file (${esc(PDFV.fp.name)})</button></span></div>` : '';
+    const placing = PDFV.placing ? (() => { const it = its.find(i => i.kind === PDFV.placing.kind && i.id === PDFV.placing.id); return it ? `<div class="banner draft"><span><b>Placing:</b> ${esc(it.label)} — “${esc(it.text.length > 90 ? it.text.slice(0, 90) + '…' : it.text)}”. Select the text, or switch to <b>Draw a box</b> for a figure or table.</span><span class="actions"><button class="btn sm" data-act="pdf" data-op="cancel">Cancel</button></span></div>` : ''; })() : '';
+    return `${head}${warn}${placing}
+      <div class="pdftools"><div class="modes"><button class="${PDFV.tool === 'text' ? 'on' : ''}" data-act="pdf" data-op="tool" data-id="text">Highlight text</button><button class="${PDFV.tool === 'box' ? 'on' : ''}" data-act="pdf" data-op="tool" data-id="box">Draw a box</button></div>
+        <span class="meta">${PDFV.doc.numPages} pages</span><span class="spacer"></span><button class="btn sm" data-act="pdf" data-op="zoomout">−</button><span class="meta">${Math.round(PDFV.zoom * 100)}%</span><button class="btn sm" data-act="pdf" data-op="zoomin">+</button></div>
+      <div class="pdfwrap"><div id="pdfpane" class="pdfpane ${PDFV.tool === 'box' ? 'tool-box' : ''}"></div>
+        <aside class="pdfside"><div class="sechead" style="margin-top:0"><h2>To place <span class="count">${todo.length}</span></h2></div>${todo.map(i => sideItem(i, false)).join('') || '<div class="meta" style="margin-bottom:12px">All comments are placed.</div>'}
+        <div class="sechead"><h2>Placed <span class="count">${done.length}</span></h2></div>${done.map(i => sideItem(i, true)).join('') || '<div class="meta">Nothing placed yet.</div>'}</aside></div>`;
+  }
+  function sideItem(i, placed) {
+    return `<div class="pitem ${cls(i)}" id="pi-${i.id}"><div class="who"><span class="badge stage">${esc(i.label)}</span> <span class="meta">${esc(i.who)}</span></div>
+      <div class="ptxt">${esc(i.text.length > 160 ? i.text.slice(0, 160) + '…' : i.text)}</div>
+      <div class="pbtn">${placed ? `<button class="btn sm" data-act="pdf" data-op="goto" data-kind="${i.kind}" data-id="${i.id}">Go to page ${i.anchor.page}</button><button class="btn sm" data-act="pdf" data-op="place" data-kind="${i.kind}" data-id="${i.id}">Move</button><button class="iconbtn" title="Remove the highlight" data-act="pdf" data-op="unplace" data-kind="${i.kind}" data-id="${i.id}">✕</button>`
+        : `<button class="btn sm primary" data-act="pdf" data-op="place" data-kind="${i.kind}" data-id="${i.id}" ${PDFV.doc ? '' : 'disabled title="Open the PDF first"'}>Place in PDF</button>`}</div></div>`;
+  }
+
+  /* ---------------- pages (rendered lazily while scrolling) ---------------- */
+  function mountPdf() {
+    const f = $('#pdffile'); if (f) f.onchange = async () => {
+      if (!f.files[0]) return; const done = busy('Opening the PDF…');
+      try { await openFile(f.files[0]); render(); } catch (e) { toast('Could not open this PDF: ' + e.message, 'err'); } finally { done(); }
+    };
+    if (PDFV.doc) buildPages();
+  }
+  async function buildPages() {
+    const pane = $('#pdfpane'); if (!pane) return;
+    const doc = PDFV.doc, p1 = await doc.getPage(1), base = p1.getViewport({scale: 1});
+    PDFV.scale = Math.max(0.3, (pane.clientWidth - 24) / base.width * PDFV.zoom);
+    const vp = p1.getViewport({scale: PDFV.scale});
+    if (PDFV.io) PDFV.io.disconnect();
+    PDFV.io = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) renderPage(e.target); }), {root: pane, rootMargin: '900px 0px'});
+    for (let i = 1; i <= doc.numPages; i++) {
+      const d = document.createElement('div'); d.className = 'pg'; d.dataset.p = i; d.style.width = vp.width + 'px'; d.style.height = vp.height + 'px';
+      d.innerHTML = `<div class="pgnum">Page ${i}</div>`; pane.appendChild(d); PDFV.io.observe(d);
+    }
+    pane.addEventListener('scroll', () => { PDFV.scroll = pane.scrollTop; });
+    if (PDFV.jump) { const j = PDFV.jump; PDFV.jump = null; setTimeout(() => jumpTo(j.kind, j.id), 150); } else pane.scrollTop = PDFV.scroll || 0;   // stay where you were after a save
+  }
+  async function renderPage(d) {
+    if (d.dataset.done) return; d.dataset.done = 1;
+    const i = +d.dataset.p, page = await PDFV.doc.getPage(i), vp = page.getViewport({scale: PDFV.scale});
+    d.style.width = vp.width + 'px'; d.style.height = vp.height + 'px';
+    const dpr = window.devicePixelRatio || 1, cv = document.createElement('canvas');
+    cv.width = Math.floor(vp.width * dpr); cv.height = Math.floor(vp.height * dpr); cv.style.cssText = 'width:100%;height:100%;display:block';
+    d.prepend(cv);
+    await page.render({canvasContext: cv.getContext('2d'), viewport: vp, transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null}).promise;
+    const hl = document.createElement('div'); hl.className = 'hllayer'; d.appendChild(hl);
+    const tl = document.createElement('div'); tl.className = 'textLayer'; d.appendChild(tl);
+    pdfjsLib.renderTextLayer({textContentSource: await page.getTextContent(), container: tl, viewport: vp, textDivs: []});
+    const bx = document.createElement('div'); bx.className = 'boxlayer'; d.appendChild(bx);
+    drawHighlights(d);
+  }
+  function drawHighlights(d) {
+    const hl = d.querySelector('.hllayer'); if (!hl) return; hl.innerHTML = '';
+    const p = +d.dataset.p;
+    items(PDFV.vid).filter(it => it.anchor && it.anchor.page === p).forEach(it => it.anchor.rects.forEach(r => {
+      const e = document.createElement('div'); e.className = `hl ${it.anchor.kind} ${cls(it)}`; e.dataset.ref = it.kind + ':' + it.id;
+      e.style.cssText = `left:${r.x * 100}%;top:${r.y * 100}%;width:${r.w * 100}%;height:${r.h * 100}%`; hl.appendChild(e);
+    }));
+  }
+  function jumpTo(kind, id) {
+    const it = items(PDFV.vid).find(x => x.kind === kind && x.id === id); if (!it || !it.anchor) return;
+    const pane = $('#pdfpane'), d = pane.querySelector(`.pg[data-p="${it.anchor.page}"]`); if (!d) return;
+    pane.scrollTo({top: d.offsetTop + it.anchor.rects[0].y * d.offsetHeight - 90, behavior: 'smooth'});
+    setTimeout(() => { const side = $('#pi-' + id); if (side) { side.classList.add('flash'); side.scrollIntoView({block: 'nearest'}); setTimeout(() => side.classList.remove('flash'), 1800); }
+      d.querySelectorAll(`.hl[data-ref="${kind}:${id}"]`).forEach(e => { e.classList.add('flash'); setTimeout(() => e.classList.remove('flash'), 1800); }); }, 400);
+  }
+
+  /* ---------------- making an anchor ---------------- */
+  const norm = (r, b) => ({x: (r.left - b.left) / b.width, y: (r.top - b.top) / b.height, w: r.width / b.width, h: r.height / b.height});
+  function selectionAnchor() {
+    const sel = getSelection(); if (!sel || !sel.rangeCount || sel.isCollapsed) return null;
+    const range = sel.getRangeAt(0), start = (range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement), pg = start && start.closest && start.closest('.pg');
+    if (!pg) return null;
+    const b = pg.getBoundingClientRect(), rects = [...range.getClientRects()].filter(r => r.width > 2 && r.height > 2 && r.bottom > b.top && r.top < b.bottom && r.right > b.left && r.left < b.right).map(r => norm(r, b));
+    if (!rects.length) return null;
+    const quote = sel.toString().replace(/\s+/g, ' ').trim().slice(0, 300);
+    return {page: +pg.dataset.p, kind: 'text', rects: rects.slice(0, 80), quote};
+  }
+  async function commitAnchor(an) {
+    if (PDFV.placing) {
+      const p = PDFV.placing; PDFV.placing = null;
+      await api('POST', aurl(`/${p.kind === 'anc' ? 'an-comments' : 'reviews'}/${p.id}/anchor`), {anchor: an}); await reload(); toast('Placed in the PDF'); return;
+    }
+    newCommentModal(an);
+  }
+  document.addEventListener('mouseup', e => {
+    const pane = $('#pdfpane'); if (!pane || !pane.contains(e.target) || PDFV.tool !== 'text') return;
+    setTimeout(() => {
+      const an = selectionAnchor(); const fab = $('#pdffab'); if (fab) fab.remove(); if (!an) return;
+      if (PDFV.placing) { getSelection().removeAllRanges(); commitAnchor(an).catch(err => toast(err.message, 'err')); return; }
+      const b = document.createElement('button'); b.id = 'pdffab'; b.className = 'btn primary sm'; b.textContent = '＋ Comment on this'; b.style.cssText = `position:fixed;left:${Math.min(e.clientX, innerWidth - 180)}px;top:${e.clientY + 12}px;z-index:50`;
+      b.onmousedown = ev => ev.preventDefault(); b.onclick = () => { b.remove(); getSelection().removeAllRanges(); commitAnchor(an).catch(err => toast(err.message, 'err')); }; document.body.appendChild(b);
+    }, 10);
+  });
+  document.addEventListener('mousedown', e => { if (!e.target.closest('#pdffab')) $('#pdffab')?.remove(); });
+  /* draw a box (figures, tables) */
+  let drag = null;
+  document.addEventListener('pointerdown', e => {
+    const bx = e.target.closest && e.target.closest('.boxlayer'); if (!bx || PDFV.tool !== 'box') return;
+    const pg = bx.parentElement, b = pg.getBoundingClientRect(), el = document.createElement('div'); el.className = 'hl box draft'; bx.appendChild(el);
+    drag = {pg, b, el, x0: e.clientX, y0: e.clientY}; e.preventDefault();
+  });
+  document.addEventListener('pointermove', e => {
+    if (!drag) return; const x = Math.min(e.clientX, drag.x0), y = Math.min(e.clientY, drag.y0), w = Math.abs(e.clientX - drag.x0), h = Math.abs(e.clientY - drag.y0);
+    const r = norm({left: x, top: y, width: w, height: h}, drag.b); drag.el.style.cssText = `left:${r.x * 100}%;top:${r.y * 100}%;width:${r.w * 100}%;height:${r.h * 100}%`;
+  });
+  document.addEventListener('pointerup', e => {
+    if (!drag) return; const d = drag; drag = null; d.el.remove();
+    const x = Math.max(d.b.left, Math.min(e.clientX, d.x0)), y = Math.max(d.b.top, Math.min(e.clientY, d.y0)), w = Math.min(d.b.right, Math.max(e.clientX, d.x0)) - x, h = Math.min(d.b.bottom, Math.max(e.clientY, d.y0)) - y;
+    if (w < 8 || h < 8) return;
+    commitAnchor({page: +d.pg.dataset.p, kind: 'box', rects: [norm({left: x, top: y, width: w, height: h}, d.b)], quote: ''}).catch(err => toast(err.message, 'err'));
+  });
+  /* click a highlight -> flash its comment in the list */
+  document.addEventListener('click', e => {
+    const pane = $('#pdfpane'); if (!pane || !pane.contains(e.target) || PDFV.tool !== 'text' || (getSelection() && !getSelection().isCollapsed)) return;
+    const pg = e.target.closest('.pg'); if (!pg) return; const b = pg.getBoundingClientRect(), x = (e.clientX - b.left) / b.width, y = (e.clientY - b.top) / b.height;
+    const hit = items(PDFV.vid).find(it => it.anchor && it.anchor.page === +pg.dataset.p && it.anchor.rects.some(r => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h));
+    if (hit) jumpTo(hit.kind, hit.id);
+  });
+
+  /* ---------------- a new comment from a highlight ---------------- */
+  function newCommentModal(an) {
+    const v = anv(PDFV.vid), figs = S.usages.filter(u => u.type === 'note' && u.anvId === PDFV.vid).sort((a, b) => a.fig.localeCompare(b.fig, undefined, {numeric: true}));
+    const last = (() => { try { return JSON.parse(localStorage.getItem('at_last_reviewer') || '{}'); } catch { return {}; } })();
+    const figOpts = figs.map(u => { const pv = ver(u.versionId); return `<option value="${u.id}">Fig ${esc(u.fig)} — ${esc(plot(pv.plotId).name)} ${verLabel(pv)}</option>`; }).join('');
+    openModal({title: 'Comment on the highlighted part', wide: true, submit: 'Save comment',
+      sub: `${anvLabel(v)} · page ${an.page}${an.quote ? ' · “' + esc(an.quote.length > 140 ? an.quote.slice(0, 140) + '…' : an.quote) + '”' : ' · marked area'}`,
+      body: field('What is it about?', radios('kind', [['figure', 'A figure'], ['table', 'A table'], ['text', 'Text'], ['general', 'General / other']], an.kind === 'box' ? 'figure' : 'text'))
+        + `<div id="figbox">${field('Which figure?', `<select name="fig"><option value="">— figure not recorded in the tracker —</option>${figOpts}</select>`, 'Figures you recorded under “+ Analysis Note” on a plot are listed. Choosing one attaches the comment to that plot.')}${field('Figure number', '<input type="text" name="fignum" maxlength="20" placeholder="e.g. 31 (only if not listed above)">', '', true)}</div>`
+        + `<div class="cols">${field('Kind of reviewer', `<select name="role">${CTX.note.roles.map(x => `<option ${last.role === x ? 'selected' : ''}>${x}</option>`).join('')}</select>`)}${field('Name', `<input type="text" name="name" maxlength="100" value="${esc(last.name || '')}">`, '', true)}</div>`
+        + field('Where (optional label)', `<input type="text" name="location" maxlength="80" placeholder="e.g. Sec 3.1, Tab 10">`, '', true)
+        + field('The comment', '<textarea name="text" required maxlength="5000" style="min-height:110px" placeholder="Paste or type what the convener said"></textarea>'),
+      setup: f => { const upd = () => { $('#figbox', f).style.display = f.kind.value === 'figure' ? 'grid' : 'none'; }; f.querySelectorAll('[name=kind]').forEach(x => x.addEventListener('change', upd)); upd(); },
+      onSubmit: async fd => {
+        const kind = fd.get('kind'), body = {role: fd.get('role'), name: fd.get('name').trim(), text: fd.get('text').trim()};
+        try { localStorage.setItem('at_last_reviewer', JSON.stringify({role: body.role, name: body.name})); } catch {}
+        if (kind === 'figure' && fd.get('fig')) {                    // a recorded figure: the comment goes under that plot
+          const r = await api('POST', aurl(`/usages/${fd.get('fig')}/reviews`), body); await api('POST', aurl(`/reviews/${r.id}/anchor`), {anchor: an});
+        } else {
+          const num = fd.get('fignum').trim(), loc = fd.get('location').trim() || (kind === 'figure' && num ? 'Fig ' + num : '');
+          const r = await api('POST', aurl('/an-comments'), {source: 'an', an_version_id: PDFV.vid, kind, location: loc, ...body}); await api('POST', aurl(`/an-comments/${r.id}/anchor`), {anchor: an});
+        }
+        await reload(); toast('Comment saved and placed');
+      }});
+  }
+
+  /* ---------------- buttons ---------------- */
+  async function act(el) {
+    const op = el.dataset.op, kind = el.dataset.kind, id = el.dataset.id;
+    if (op === 'tool') { PDFV.tool = id; render(); }
+    else if (op === 'zoomin' || op === 'zoomout') { PDFV.zoom = Math.max(0.5, Math.min(3, PDFV.zoom + (op === 'zoomin' ? 0.25 : -0.25))); render(); }
+    else if (op === 'place') { PDFV.placing = {kind, id}; render(); }
+    else if (op === 'cancel') { PDFV.placing = null; render(); }
+    else if (op === 'goto') jumpTo(kind, id);
+    else if (op === 'unplace') { await api('POST', aurl(`/${kind === 'anc' ? 'an-comments' : 'reviews'}/${id}/anchor`), {anchor: null}); await reload(); }
+    else if (op === 'record') { await api('PATCH', aurl('/versions/' + PDFV.vid), {pdf: PDFV.fp}); PDFV.match = true; await reload(); toast('PDF recorded for ' + anvLabel(anv(PDFV.vid))); }
+  }
+  /* open the viewer for a version, or jump to where a comment is placed */
+  function open(el) {
+    let vid = el.dataset.v, jump = null;
+    if (el.dataset.kind) {
+      const k = el.dataset.kind, id = el.dataset.id;
+      if (k === 'anc') vid = S.anc.find(c => c.id === id)?.anvId; else { const f = findReview(id); vid = f && f.u.anvId; }
+      jump = {kind: k, id};
+    }
+    if (!vid) { toast('Select an AN version first.', 'err'); return; }
+    PDFV.jump = jump; if (PDFV.vid !== vid) Object.assign(PDFV, {vid, doc: null, fp: null, match: null, scroll: 0});
+    go(L('/pdf/' + vid)); if (route()[3] === vid) render();
+  }
+  window.PDF = {viewPdf, mountPdf, act, open, openFile, state: PDFV};
+})();

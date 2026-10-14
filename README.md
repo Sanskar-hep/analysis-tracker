@@ -13,8 +13,8 @@ contains no data, so it is safe for it to be public.
 1. **Create a GitHub organisation** for the group (free), or use your own account.
 2. **Create the data repo**: `analysis-tracker-data`, set to **Private**, tick **Add a README file** (it needs a first commit).
    Add group members: *Settings -> Collaborators and teams -> Add people* with **Write** access.
-3. **Create the site repo**: `analysis-tracker` (Public). Upload `index.html`, `app.js`, `backend.js`, `style.css`,
-   `config.js`, `.nojekyll`.
+3. **Create the site repo**: `analysis-tracker` (Public). Upload `index.html`, `app.js`, `backend.js`, `emailparse.js`, `pdfview.js`, `style.css`,
+   `config.js`, `.nojekyll` and the `vendor` folder.
    - Optional: edit `config.js` and set `repo: 'your-org/analysis-tracker-data'` so people don't have to type it.
 4. **Turn on Pages**: site repo -> *Settings -> Pages -> Build and deployment -> Deploy from a branch ->* `main` / `(root)`.
    After a minute the site is at `https://<owner>.github.io/analysis-tracker/`.
@@ -51,8 +51,35 @@ The preview uses a fake in-memory GitHub, so data disappears when you stop it.
 - Keep plots reasonably sized (hundreds of KB to a few MB); GitHub rejects files over 100 MB and repos work best under ~1-5 GB.
 - GitHub API limit: 5000 requests/hour per user; normal use is far below this.
 
+## How an analysis is organised
+- **Just started:** only plots (with versions). Two buttons on the dashboard: *Have you moved to the AN stage?* and
+  *Have you presented in a meeting?*
+- **Meetings** (appears after you say you presented, or at the AN stage): type the meeting name yourself (TMP, a group
+  name, ...). Record a plot you showed, the comments people gave on it, and general methodology suggestions.
+- **AN stage:** AN name, collaboration, and AN versions. After a version is published, *AN review* opens:
+  the convenors' comments in two groups, **figures** (linked to the plot you recorded as that Fig number) and
+  **text, tables and methodology**. Every comment has a *Your answer* box; *Reply document* turns your answers into a
+  point-by-point email.
+- **Moving through versions:** each published AN version keeps its own figures and comments; unreleased work lives in the
+  working draft until you publish.
+
+## The AN PDF and highlighting
+PDFs are **not uploaded**. Open the PDF from your computer (AN versions -> Open, or AN review -> Open the AN PDF).
+The tracker saves only its name, size and a SHA-256 fingerprint, so it can warn you if you open a different file.
+Use *Highlight text* (select text) or *Draw a box* (figures, tables), then attach a comment, or *Place in PDF* for a
+comment you already imported. Highlights are saved as page + position, so they follow the comment everywhere.
+
+## Importing comments from an email
+On **AN review** or **Meetings** click **Import comments from email**, paste the whole email and click *Read comments*.
+The text is split into separate comments in your browser (cover note, greetings and sign-offs are skipped; "Sec 3.1:",
+"Tab 10:", "L390:" labels become the location). A comment that mentions "Fig 10" is matched to the figure recorded as Fig 10,
+"slide 12" to the plot on that slide; everything else is saved as a comment on the text/methodology. Check the list, then
+**Import**: all comments are saved in one commit. Nothing is read from Gmail; you paste the text yourself.
+
 ## Files
 - `index.html`, `app.js`, `style.css` - interface
+- `emailparse.js` - splits a pasted email into comments
+- `pdfview.js` + `vendor/pdfjs/` - the PDF viewer (PDF.js, Apache-2.0)
 - `backend.js` - storage layer (git commits through the GitHub API) and all the rules
 - `config.js` - optional default repository
 - `server-version/` - the earlier Python-server edition with real server-side accounts (not used on GitHub)

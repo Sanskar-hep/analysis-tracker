@@ -85,9 +85,17 @@ const filePath = (aid, f) => `analyses/${aid}/files/${f.id}${f.ext}`;
 async function getState(aid, head) {
   const c = STATE_CACHE.get(aid); if (c && c.head === head) return c.st;
   const t = await readText(statePath(aid), head); if (t === null) return null;
-  const st = JSON.parse(t); STATE_CACHE.set(aid, {head, st}); return st;
+  const st = JSON.parse(t); migrate(st); STATE_CACHE.set(aid, {head, st}); return st;
 }
-const newState = () => ({format: 2, analysis: null, an_versions: [], categories: [], plots: [], plot_versions: [], usages: [], documents: [], files: []});
+function migrate(st) {                                    // older files get the newer fields
+  st.an_comments = st.an_comments || [];
+  st.an_comments.forEach(c => { c.source = c.source || 'an'; c.kind = c.kind || 'text'; c.answer = c.answer || ''; c.meeting = c.meeting || ''; c.meeting_date = c.meeting_date || ''; if (c.anchor === undefined) c.anchor = null; });
+  st.usages.forEach(u => u.reviews.forEach(r => { r.answer = r.answer || ''; if (r.anchor === undefined) r.anchor = null; }));
+  st.an_versions.forEach(v => { if (v.pdf === undefined) v.pdf = null; });
+  if (st.analysis && st.analysis.presented === undefined) st.analysis.presented = false;
+  return st;
+}
+const newState = () => ({format: 2, analysis: null, an_versions: [], categories: [], plots: [], plot_versions: [], usages: [], documents: [], files: [], an_comments: []});
 
 /* One atomic commit: blobs -> tree -> commit -> fast-forward the branch. Throws {conflict:true} if someone pushed meanwhile. */
 async function commit(head, changes, message) {
@@ -241,7 +249,9 @@ function ghForget() {            // drop the current connection from this device
 }
 
 /* ============================ rules (ported from the server version) ============================ */
-const TYPES = ['note', 'tmp', 'group', 'internal', 'collab'];
+const TYPES = ['note', 'tmp', 'group', 'internal', 'collab', 'meeting'];   // tmp/group/internal/collab only exist in older data; new records use 'note' or 'meeting'
+const NEW_TYPES = ['note', 'meeting'];
+const KINDS = ['text', 'table', 'equation', 'general', 'figure'];
 
 function anFields(b, ex) {
   const stage = sv(b, 'stage', 20, true, ex ? ex.stage : '');
@@ -259,7 +269,7 @@ const summary = st => {
   const a = st.analysis, rv = st.usages.flatMap(u => u.reviews);
   return {...a, plots: st.plots.length, versions: st.an_versions.length,
     latest_version: st.an_versions.length ? Math.max(...st.an_versions.map(v => v.number)) : null,
-    pending: rv.filter(r => !r.none && r.status === 'pending').length};
+    pending: rv.filter(r => !r.none && r.status === 'pending').length + (st.an_comments || []).filter(c => c.status === 'pending').length};
 };
 async function listAnalyses() {
   const head = await getHead(), ids = (await listDir('analyses', head)).filter(d => d.type === 'dir').map(d => d.name);
@@ -281,15 +291,16 @@ const H = {
     if (f.an_status === 'published') {
       const fv = b.first_version || {}, num = fv.number ?? 1;
       if (!Number.isInteger(num) || num < 1) throw E(400, 'Version number must be a positive integer');
-      first = {num, on: dateOk(sv(fv, 'published_on', 10, false, todayStr()), 'published_on'), notes: sv(fv, 'notes', 2000)};
+      first = {num, on: dateOk(sv(fv, 'published_on', 10, false, todayStr()), 'published_on'), notes: sv(fv, 'notes', 2000), pdf: pdfInfo(fv.pdf)};
     }
     const aid = nid();
     await tx(aid, st => {
-      st.analysis = {id: aid, title, ...f, owner: ME().id, owner_name: ME().name, created: now()};
-      if (first) st.an_versions.push({id: nid(), analysis_id: aid, number: first.num, published_on: first.on, notes: first.notes, status: 'published', created: now()});
+      st.analysis = {id: aid, title, ...f, owner: ME().id, owner_name: ME().name, presented: false, created: now()};
+      if (first) st.an_versions.push({id: nid(), analysis_id: aid, number: first.num, published_on: first.on, notes: first.notes, pdf: first.pdf, status: 'published', created: now()});
     }, {create: true, message: `Create analysis "${title}"`});
     return {id: aid};
   },
+  setPresented: ({aid}, b) => tx(aid, st => { st.analysis.presented = !!b.value; return {ok: true}; }, {message: 'Meetings section ' + (b.value ? 'enabled' : 'disabled')}),
   async getAnalysis({aid}) { return clone(await readState(aid)); },
   async updateAnalysis({aid}, b) {
     const cur = await readState(aid); if (!isOwner(cur)) throw E(403, 'Only the owner can change the analysis settings');
@@ -299,10 +310,15 @@ const H = {
       const a = st.analysis, f = anFields(b, a);
       if (a.stage === 'an_stage' && f.stage === 'just_started') throw E(400, 'An analysis cannot go back to the "Just Started" stage');
       if (f.stage === 'an_stage') {
-        if (a.stage === 'just_started' && f.an_status === 'published') throw E(400, 'Create the analysis as "AN being written", then publish version 1 from the AN versions page');
+        if (a.stage === 'just_started' && f.an_status === 'published') {          // moving to the AN stage with a version already published
+          const fv = b.first_version || {}, num = fv.number ?? 1;
+          if (!Number.isInteger(num) || num < 1) throw E(400, 'Version number must be a positive integer');
+          st.an_versions.push({id: nid(), analysis_id: a.id, number: num, published_on: dateOk(sv(fv, 'published_on', 10, false, todayStr()), 'published_on'), notes: sv(fv, 'notes', 2000), pdf: pdfInfo(fv.pdf), status: 'published', created: now()});
+        }
         if (a.stage === 'an_stage') f.an_status = a.an_status;
       }
       Object.assign(a, {title, ...f});
+      if (f.stage === 'an_stage') a.presented = true;
     }, {message: 'Edit analysis settings'});
     return {ok: true};
   },
@@ -335,10 +351,10 @@ const H = {
     if (st.an_versions.some(v => v.number === num)) throw E(409, `Version ${num} already exists`);
     const pub = dateOk(sv(b, 'published_on', 10, false, todayStr()), 'published_on'), notes = sv(b, 'notes', 2000);
     const prev = [...st.an_versions].filter(v => v.number < num).sort((x, y) => y.number - x.number)[0], vid = nid();
-    st.an_versions.push({id: vid, analysis_id: a.id, number: num, published_on: pub, notes, status: 'published', created: now()});
+    st.an_versions.push({id: vid, analysis_id: a.id, number: num, published_on: pub, notes, pdf: pdfInfo(b.pdf), status: 'published', created: now()});
     // Stamp the unreleased working draft with this version: it becomes this version's historical record.
     st.plot_versions.forEach(v => { if (!v.an_version_id) v.an_version_id = vid; });
-    st.usages.forEach(u => { if (!u.an_version_id) u.an_version_id = vid; });
+    st.usages.forEach(u => { if (!u.an_version_id && u.type === 'note') u.an_version_id = vid; });   // meeting records are not tied to an AN version
     let carried = 0;
     if (b.carry_figures && prev) {
       const notesOf = id => st.usages.filter(u => u.an_version_id === id && u.type === 'note');
@@ -355,7 +371,8 @@ const H = {
   }, {message: 'Publish AN version'}),
   updateVersion: ({aid, id}, b) => tx(aid, st => {
     const v = byId(st.an_versions, id, 'Version');
-    v.published_on = dateOk(sv(b, 'published_on', 10, false, v.published_on) || v.published_on, 'published_on'); v.notes = sv(b, 'notes', 2000, false, v.notes); return {ok: true};
+    v.published_on = dateOk(sv(b, 'published_on', 10, false, v.published_on) || v.published_on, 'published_on'); v.notes = sv(b, 'notes', 2000, false, v.notes);
+    if (b.pdf !== undefined) v.pdf = pdfInfo(b.pdf); return {ok: true};
   }, {message: 'Edit AN version'}),
 
   /* ---- categories / plots ---- */
@@ -401,7 +418,7 @@ const H = {
 
   /* ---- usages & reviews ---- */
   createUsage: ({aid}, b) => tx(aid, st => {
-    const typ = sv(b, 'type', 10, true); if (!TYPES.includes(typ)) throw E(400, 'Invalid type');
+    const typ = sv(b, 'type', 10, true); if (!NEW_TYPES.includes(typ)) throw E(400, 'Invalid type');
     if (typ === 'note' && st.analysis.stage !== 'an_stage') throw E(400, 'Analysis Note figures are only available at the AN stage');
     const pv = byId(st.plot_versions, sv(b, 'plot_version_id', 40, true), 'Plot version');
     const ver = b.an_version_id ? byId(st.an_versions, b.an_version_id, 'AN version') : null;
@@ -420,7 +437,7 @@ const H = {
   createReview: ({aid, uid}, b) => tx(aid, st => {
     const u = byId(st.usages, uid, 'Record');
     if (u.type === 'note' && !u.an_version_id) throw E(400, 'Reviewer comments can only be recorded against a published AN version');
-    const {f} = reviewFields(b), r = {id: nid(), analysis_id: st.analysis.id, usage_id: u.id, ...f, status: 'pending', resolved_version_id: null, resolution: '', resolved_at: null, created: now()};
+    const {f} = reviewFields(b), r = {id: nid(), analysis_id: st.analysis.id, usage_id: u.id, ...f, answer: '', anchor: null, status: 'pending', resolved_version_id: null, resolution: '', resolved_at: null, created: now()};
     u.reviews.push(r); return {id: r.id};
   }, {message: 'Add feedback'}),
   updateReview: ({aid, id}, b) => tx(aid, st => {
@@ -446,15 +463,81 @@ const H = {
     return {ok: true};
   }, {message: 'Resolve feedback'}),
 
+  /* ---- comments on the AN text / tables / methodology (not tied to a plot) ---- */
+  createAnComment: ({aid}, b) => tx(aid, st => {
+    const source = sv(b, 'source', 10, false, 'an') || 'an';
+    if (!['an', 'meeting'].includes(source)) throw E(400, 'Invalid source');
+    const ver = source === 'an' ? byId(st.an_versions, sv(b, 'an_version_id', 40, true), 'AN version') : null;
+    const c = {id: nid(), analysis_id: st.analysis.id, source, an_version_id: ver ? ver.id : null, ...anCommentFields(b, source), answer: '', anchor: null, status: 'pending', resolution: '', resolved_in: null, resolved_at: null, created: now()};
+    st.an_comments.push(c); return {id: c.id};
+  }, {message: 'Add AN comment'}),
+  updateAnComment: ({aid, id}, b) => tx(aid, st => { const c = byId(st.an_comments, id, 'Comment'); Object.assign(c, anCommentFields(b, c.source)); return {ok: true}; }, {message: 'Edit comment'}),
+  answerAnComment: ({aid, id}, b) => tx(aid, st => { byId(st.an_comments, id, 'Comment').answer = sv(b, 'answer', 5000); return {ok: true}; }, {message: 'Write answer'}),
+  answerReview: ({aid, id}, b) => tx(aid, st => { findReview(st, id).answer = sv(b, 'answer', 5000); return {ok: true}; }, {message: 'Write answer'}),
+  anchorAnComment: ({aid, id}, b) => tx(aid, st => { byId(st.an_comments, id, 'Comment').anchor = anchorOk(b.anchor); return {ok: true}; }, {message: 'Place comment in the PDF'}),
+  anchorReview: ({aid, id}, b) => tx(aid, st => { findReview(st, id).anchor = anchorOk(b.anchor); return {ok: true}; }, {message: 'Place comment in the PDF'}),
+  resolveAnComment: ({aid, id}, b) => tx(aid, st => {
+    const c = byId(st.an_comments, id, 'Comment'), note = sv(b, 'note', 3000, true), rin = b.resolved_in ? byId(st.an_versions, b.resolved_in, 'AN version').id : null;
+    Object.assign(c, {status: 'resolved', resolution: note, resolved_in: rin, resolved_at: now()}); return {ok: true};
+  }, {message: 'Resolve AN comment'}),
+  reopenAnComment: ({aid, id}) => tx(aid, st => { Object.assign(byId(st.an_comments, id, 'Comment'), {status: 'pending', resolution: '', resolved_in: null, resolved_at: null}); return {ok: true}; }, {message: 'Reopen AN comment'}),
+  deleteAnComment: ({aid, id}) => tx(aid, st => { byId(st.an_comments, id, 'Comment'); st.an_comments = st.an_comments.filter(c => c.id !== id); return {ok: true}; }, {message: 'Delete AN comment'}),
+  /* many comments from one e-mail, saved as ONE commit: target 'an' = text comment, otherwise the id of a figure / meeting record */
+  importComments: ({aid}, b) => tx(aid, st => {
+    const items = Array.isArray(b.items) ? b.items : [];
+    if (!items.length) throw E(400, 'Nothing to import'); if (items.length > 300) throw E(400, 'Too many comments at once (max 300)');
+    const role = sv(b, 'role', 60, true), name = sv(b, 'name', 100), ver = b.an_version_id ? byId(st.an_versions, b.an_version_id, 'AN version') : null;
+    const mode = sv(b, 'mode', 10, false, 'an') || 'an', meeting = mode === 'meeting' ? sv(b, 'meeting', 100, true) : '', mdate = mode === 'meeting' ? dateOk(sv(b, 'meeting_date', 10), 'meeting_date') : '';
+    let nRev = 0, nAn = 0;
+    for (const it of items) {
+      const text = sv(it, 'text', 5000, true), loc = sv(it, 'location', 80), target = sv(it, 'target', 40, true), kind = KINDS.includes(it.kind) ? it.kind : 'text';
+      if (target === 'an' || target === 'text') {
+        if (mode === 'an' && !ver) throw E(400, 'Choose a published AN version to import into');
+        st.an_comments.push({id: nid(), analysis_id: st.analysis.id, source: mode, an_version_id: mode === 'an' ? ver.id : null, meeting, meeting_date: mdate, kind, role, name, location: loc, text, answer: '', anchor: null,
+          status: 'pending', resolution: '', resolved_in: null, resolved_at: null, created: now()}); nAn++;
+      } else {
+        const u = byId(st.usages, target, 'Record');
+        if (u.type === 'note' && (!u.an_version_id || (ver && u.an_version_id !== ver.id))) throw E(400, 'A figure belongs to a different AN version');
+        u.reviews.push({id: nid(), analysis_id: st.analysis.id, usage_id: u.id, role, name, none: false, text: loc && !/^fig/i.test(loc) ? `${loc}: ${text}` : text, answer: '', anchor: null,
+          status: 'pending', resolved_version_id: null, resolution: '', resolved_at: null, created: now()}); nRev++;
+      }
+    }
+    return {reviews: nRev, an: nAn};
+  }, {message: 'Import comments from e-mail'}),
+
   /* ---- documents ---- */
   createDoc: ({aid}, b) => tx(aid, st => { const d = {id: nid(), analysis_id: st.analysis.id, ...docFields(st, b), author: ME().name, created: now()}; st.documents.push(d); return {id: d.id}; }, {message: 'Add document'}),
   updateDoc: ({aid, id}, b) => tx(aid, st => { const d = byId(st.documents, id, 'Document'); Object.assign(d, docFields(st, b)); return {ok: true}; }, {message: 'Edit document'}),
   deleteDoc: ({aid, id}) => tx(aid, st => { byId(st.documents, id, 'Document'); st.documents = st.documents.filter(d => d.id !== id); return {ok: true}; }, {message: 'Delete document'}),
 };
 
+function anCommentFields(b, source = 'an') {
+  const kind = sv(b, 'kind', 12, false, 'text') || 'text'; if (!KINDS.includes(kind)) throw E(400, 'Invalid comment kind');
+  const f = {role: sv(b, 'role', 60, true), name: sv(b, 'name', 100), location: sv(b, 'location', 80), text: sv(b, 'text', 5000, true), kind, meeting: '', meeting_date: ''};
+  if (source === 'meeting') { f.meeting = sv(b, 'meeting', 100, true); f.meeting_date = dateOk(sv(b, 'meeting_date', 10), 'meeting_date'); }
+  return f;
+}
+function pdfInfo(p) {
+  if (p === null || p === undefined) return null;
+  if (typeof p !== 'object') throw E(400, 'Invalid PDF details');
+  const sha = sv(p, 'sha256', 64, true).toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(sha)) throw E(400, 'Invalid PDF fingerprint');
+  if (!Number.isInteger(p.size) || p.size < 0) throw E(400, 'Invalid PDF size');
+  if (p.pages != null && !(Number.isInteger(p.pages) && p.pages > 0)) throw E(400, 'Invalid page count');
+  return {name: sv(p, 'name', 200, true), size: p.size, sha256: sha, pages: p.pages ?? null};
+}
+/* a highlight in the PDF: page number + rectangles as fractions of the page (independent of zoom) + the highlighted text */
+function anchorOk(a) {
+  if (a === null || a === undefined) return null;
+  if (typeof a !== 'object' || !Number.isInteger(a.page) || a.page < 1 || a.page > 5000 || !['text', 'box'].includes(a.kind)) throw E(400, 'Invalid highlight');
+  const n = v => { const x = Number(v); if (!isFinite(x)) throw E(400, 'Invalid highlight'); return Math.round(Math.min(1, Math.max(0, x)) * 10000) / 10000; };
+  const rects = (Array.isArray(a.rects) ? a.rects : []).slice(0, 80).map(r => ({x: n(r.x), y: n(r.y), w: n(r.w), h: n(r.h)}));
+  if (!rects.length) throw E(400, 'Invalid highlight');
+  return {page: a.page, kind: a.kind, rects, quote: sv(a, 'quote', 600)};
+}
 function usageFields(b, typ) {
   if (typ === 'note') return {fig: sv(b, 'fig', 40, true), an_ver: sv(b, 'an_ver', 40), link: '', slide: '', date: '', title: ''};
-  return {fig: '', an_ver: '', link: urlOk(sv(b, 'link', 500, true), 'link'), slide: sv(b, 'slide', 40, true), date: dateOk(sv(b, 'date', 10, true), 'date'), title: sv(b, 'title', 150)};
+  return {fig: '', an_ver: '', link: urlOk(sv(b, 'link', 500), 'link'), slide: sv(b, 'slide', 40), date: dateOk(sv(b, 'date', 10, true), 'date'), title: sv(b, 'title', 150, typ === 'meeting')};
 }
 function reviewFields(b) {
   const none = !!b.none, text = sv(b, 'text', 5000, !none), s = sv(b, 'status', 10, false, 'pending') || 'pending';
@@ -517,6 +600,11 @@ const ROUTES = [
   R('POST', A_ + `\\/usages\\/(?<uid>${ID})\\/reviews$`, H.createReview),
   R('PATCH', A_ + `\\/reviews\\/(?<id>${ID})$`, H.updateReview), R('DELETE', A_ + `\\/reviews\\/(?<id>${ID})$`, H.deleteReview),
   R('POST', A_ + `\\/reviews\\/(?<id>${ID})\\/resolve$`, H.resolveReview),
+  R('POST', A_ + '\\/an-comments$', H.createAnComment), R('PATCH', A_ + `\\/an-comments\\/(?<id>${ID})$`, H.updateAnComment), R('DELETE', A_ + `\\/an-comments\\/(?<id>${ID})$`, H.deleteAnComment),
+  R('POST', A_ + `\\/an-comments\\/(?<id>${ID})\\/resolve$`, H.resolveAnComment), R('POST', A_ + `\\/an-comments\\/(?<id>${ID})\\/reopen$`, H.reopenAnComment),
+  R('POST', A_ + '\\/import-comments$', H.importComments), R('POST', A_ + '\\/presented$', H.setPresented),
+  R('POST', A_ + `\\/an-comments\\/(?<id>${ID})\\/answer$`, H.answerAnComment), R('POST', A_ + `\\/an-comments\\/(?<id>${ID})\\/anchor$`, H.anchorAnComment),
+  R('POST', A_ + `\\/reviews\\/(?<id>${ID})\\/answer$`, H.answerReview), R('POST', A_ + `\\/reviews\\/(?<id>${ID})\\/anchor$`, H.anchorReview),
   R('POST', A_ + '\\/documents$', H.createDoc), R('PATCH', A_ + `\\/documents\\/(?<id>${ID})$`, H.updateDoc), R('DELETE', A_ + `\\/documents\\/(?<id>${ID})$`, H.deleteDoc),
 ];
 async function api(method, path, body, opts = {}) {
