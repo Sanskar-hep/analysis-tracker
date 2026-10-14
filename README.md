@@ -103,5 +103,5 @@ the "Designed & built by" credit in the footer should stay. The bundled PDF.js (
 (c) Mozilla and keeps its own licence.
 
 ## How to cite
-Nanda, S. (2026). *Analysis-Tracker* (v1.0.0) [Software]. Zenodo. https://doi.org/10.5281/zenodo.23377665 
-(DOI of all versions: https://doi.org/10.5281/zenodo.23377664)
+Nanda, S. (2026). *Analysis-Tracker* [Software]. Zenodo. https://doi.org/10.5281/zenodo.23377664
+This DOI always points to the latest version. Each release also has its own version DOI, listed on the Zenodo page.
