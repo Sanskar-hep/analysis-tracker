@@ -879,17 +879,23 @@ function bulkModal(catId) {
   const an = isAN(), cx = ctx(), pubs = [...S.anv].sort((a, b) => b.number - a.number);
   const target = pubs.length ? field('These plots belong to', `<select name="tgt"><option value="">Working draft — for the next AN version</option>${pubs.map(v => `<option value="${v.id}" ${!cx.draft && cx.id === v.id ? 'selected' : ''}>${esc(anvLabel(v))} (already published) — its plots</option>`).join('')}</select>`,
     'Choose a published version to upload the plots it already contains, so convener comments can be linked to them. They also show up in the working version as unchanged until you revise them; the published version itself is never altered.') : '';
+  const chg = field('If a plot already exists, what changed?', '<input type="text" name="changes" maxlength="500" value="Updated plot." placeholder="e.g. Rebinned, new MVA training">', 'Only used when you choose “Add as new version” for a plot that already exists.');
   openModal({title: 'Upload many plots', xl: true, submit: 'Upload all',
-    sub: 'Choose all the images at once. The plot name is the file name without the extension, and a name like <b>electron_pt_2016postVFP.png</b> is also read as era 2016postVFP; plots that share a name part are grouped as the panels of one figure.',
-    body: `<div class="cols">${field('Put them in', `<select name="cat">${catOptions(catId)}</select>`, 'A category or subcategory. You can change it for single plots below.')}${target || field('If a plot already exists, what changed?', '<input type="text" name="changes" maxlength="500" value="Updated plot." placeholder="e.g. Rebinned, new MVA training">', 'Used for plots that already exist: they get a new version instead of a duplicate.')}</div>`
-      + (target ? field('If a plot already exists, what changed?', '<input type="text" name="changes" maxlength="500" value="Updated plot." placeholder="e.g. Rebinned, new MVA training">', 'Only used when you choose “Add as new version” for a plot that already exists.') : '')
+    sub: 'Choose images, then choose more as often as you like: they are added to the list below. The plot name is the file name without the extension, and a name like <b>electron_pt_2016postVFP.png</b> is also read as era 2016postVFP; plots that share a name part are grouped as the panels of one figure.',
+    body: `<div class="cols">${field('Put them in', `<select name="cat">${catOptions(catId)}</select>`, 'A category or subcategory. You can change it for single plots below.')}${target || chg}</div>${target ? chg : ''}`
       + `<label class="drop"><input class="vh" type="file" name="plots" accept="image/*" multiple><span class="dropmsg"></span><img class="dpreview" hidden alt=""></label>`
       + '<div id="bulk" style="margin-top:14px"></div>',
     setup: f => {
-      const inp = f.plots, box = $('#bulk', f), sorted = () => [...inp.files].sort((a, b) => a.name.localeCompare(b.name, undefined, {numeric: true}));
-      const published = () => !!(f.tgt && f.tgt.value);
+      const inp = f.plots, box = $('#bulk', f), published = () => !!(f.tgt && f.tgt.value);
+      let entries = [], figs = {}, nid = 0;
+      const baseOf = e => splitEra(e.stem).base;
+      const sync = () => {                                 // keep what was typed before the list is redrawn
+        box.querySelectorAll('tr[data-id]').forEach(r => { const e = entries.find(x => x.id === +r.dataset.id); if (!e) return;
+          e.name = r.querySelector('[name^=nm]').value; e.era = r.querySelector('[name^=era]').value; e.cid = r.querySelector('[name^=ct]').value; e.loc = r.querySelector('[name^=loc]').value; e.act = r.querySelector('[name^=act]').value; e.actSet = !!r.querySelector('[name^=act]').dataset.set; });
+        box.querySelectorAll('input[data-base]').forEach(i => { figs[i.dataset.base] = i.value; });
+      };
       const refresh = () => {
-        const rows = [...box.querySelectorAll('tr[data-i]')], key = r => r.querySelector('[name^=ct]').value + '\u0000' + r.querySelector('[name^=nm]').value.trim();
+        const rows = [...box.querySelectorAll('tr[data-id]')], key = r => r.querySelector('[name^=ct]').value + '\u0000' + r.querySelector('[name^=nm]').value.trim();
         const cnt = new Map(); rows.forEach(r => cnt.set(key(r), (cnt.get(key(r)) || 0) + 1));
         rows.forEach(r => {
           const nm = r.querySelector('[name^=nm]').value.trim(), cid = r.querySelector('[name^=ct]').value, sel = r.querySelector('[name^=act]'), st = r.querySelector('.st');
@@ -899,33 +905,48 @@ function bulkModal(catId) {
         });
       };
       const draw = () => {
-        const fl = sorted(); $('.dpreview', f).style.display = 'none';
-        $('.dropmsg', f).innerHTML = fl.length ? `<b>${fl.length} image${fl.length === 1 ? '' : 's'} chosen</b> — click to choose again` : '<b style="color:var(--acc)">Choose images</b> (select many) or drag &amp; drop them here';
-        if (!fl.length) { box.innerHTML = ''; return; }
-        const groups = new Map(); fl.forEach((file, i) => { const stem = file.name.replace(/\.[^.]+$/, ''), sp = splitEra(stem); if (!groups.has(sp.base)) groups.set(sp.base, []); groups.get(sp.base).push({file, i, stem, era: sp.era}); });
-        let g = 0, rows = '';
+        $('.dpreview', f).style.display = 'none'; const n = entries.length;
+        $('.dropmsg', f).innerHTML = n ? `<b>${n} image${n === 1 ? '' : 's'} in the list</b> — click here or drop more files to <b>add more</b>` : '<b style="color:var(--acc)">Choose images</b> (select many) or drag &amp; drop them here';
+        if (!n) { box.innerHTML = ''; return; }
+        const groups = new Map(); [...entries].sort((a, b) => a.file.name.localeCompare(b.file.name, undefined, {numeric: true})).forEach(e => { const b = baseOf(e); if (!groups.has(b)) groups.set(b, []); groups.get(b).push(e); });
+        let rows = '';
         for (const [base, items] of groups) {
-          rows += `<tr class="grp"><td colspan="5">${esc(base)} · ${items.length} file${items.length === 1 ? '' : 's'}</td><td>${an ? `<input type="text" name="fig${g}" maxlength="40" placeholder="Figure no.">` : ''}</td></tr>`;
-          rows += items.map(it => `<tr data-i="${it.i}" data-g="${g}"><td class="mono">${esc(it.file.name)}</td><td><input type="text" name="nm${it.i}" maxlength="150" value="${esc(it.stem)}"></td><td><input type="text" name="era${it.i}" maxlength="60" value="${esc(it.era)}" placeholder="era"></td>
-            <td><select name="ct${it.i}">${catOptions(f.cat.value)}</select></td><td><input type="text" name="loc${it.i}" maxlength="200" placeholder="p. 12 · Sec 3.2"></td><td><span class="st"></span><select name="act${it.i}" hidden><option value="version">Add as new version</option><option value="skip">Skip it</option></select></td></tr>`).join('');
-          g++;
+          rows += `<tr class="grp"><td colspan="5">${esc(base)} · ${items.length} file${items.length === 1 ? '' : 's'} <button type="button" class="link" data-rmg="${esc(base)}" title="Leave this whole group out">✕ exclude all ${items.length}</button></td><td>${an ? `<input type="text" data-base="${esc(base)}" maxlength="40" placeholder="Figure no." value="${esc(figs[base] || '')}">` : ''}</td><td></td></tr>`;
+          rows += items.map(e => `<tr data-id="${e.id}" data-base="${esc(base)}"><td class="mono">${esc(e.file.name)}</td><td><input type="text" name="nm${e.id}" maxlength="150" value="${esc(e.name)}"></td><td><input type="text" name="era${e.id}" maxlength="60" value="${esc(e.era)}" placeholder="era"></td>
+            <td><select name="ct${e.id}">${catOptions(e.cid)}</select></td><td><input type="text" name="loc${e.id}" maxlength="200" value="${esc(e.loc)}" placeholder="p. 12 · Sec 3.2"></td><td><span class="st"></span><select name="act${e.id}" ${e.actSet ? 'data-set="1"' : ''} hidden><option value="version" ${e.act === 'version' ? 'selected' : ''}>Add as new version</option><option value="skip" ${e.act === 'skip' ? 'selected' : ''}>Skip it</option></select></td>
+            <td><button type="button" class="iconbtn" data-rm="${e.id}" title="Leave this plot out">✕</button></td></tr>`).join('');
         }
-        box.innerHTML = `<div class="card bulk" style="overflow:auto;max-height:360px"><table><tr><th>File</th><th>Plot name</th><th>Era / panel</th><th>Category</th><th>Location in the AN</th><th>${an ? 'Figure no. (groups)' : 'Result'}</th></tr>${rows}</table></div>
-          <div class="h meta" style="margin-top:6px">Check the names and eras it found and fill in the AN location if you like. ${an ? 'A figure number on a group records those plots as that figure (one panel per era) — needed to attach convener comments to them. A location like “Fig 5” also works.' : ''} If a plot with the same name already exists you choose what to do with it.</div>`;
+        box.innerHTML = `<div class="actions" style="margin-bottom:8px"><button type="button" class="btn sm" id="bmore">＋ Add more plots</button><button type="button" class="btn sm" id="bclear">Clear the list</button></div>
+          <div class="card bulk" style="overflow:auto;max-height:360px"><table><tr><th>File</th><th>Plot name</th><th>Era / panel</th><th>Category</th><th>Location in the AN</th><th>${an ? 'Figure no. (groups)' : 'Result'}</th><th></th></tr>${rows}</table></div>
+          <div class="h meta" style="margin-top:6px">Use ✕ to leave out one plot, or “exclude all” on a group heading to leave out a whole group (for example every era of one variable). ${an ? 'A figure number on a group records those plots as that figure (one panel per era), which is needed to attach convener comments to them; a location like “Fig 5” also works.' : ''} If a plot with the same name already exists you choose what to do with it.</div>`;
         refresh();
       };
-      inp.addEventListener('change', draw); $('.drop', f).addEventListener('drop', () => setTimeout(draw));
+      const absorb = files => {                          // add to the list (never replace it)
+        sync(); const have = new Set(entries.map(e => e.file.name + '|' + e.file.size + '|' + e.file.lastModified));
+        [...files].forEach(file => { const k = file.name + '|' + file.size + '|' + file.lastModified; if (have.has(k)) return; have.add(k);
+          const stem = file.name.replace(/\.[^.]+$/, ''), sp = splitEra(stem); entries.push({id: ++nid, file, stem, name: stem, era: sp.era, cid: f.cat.value, loc: '', act: published() ? 'skip' : 'version', actSet: false}); });
+        draw();
+      };
+      inp.addEventListener('change', () => { const fs = [...inp.files]; inp.value = ''; absorb(fs); });
+      $('.drop', f).addEventListener('drop', () => setTimeout(() => { const fs = [...inp.files]; inp.value = ''; absorb(fs); }));
       f.cat.addEventListener('change', () => { box.querySelectorAll('select[name^=ct]').forEach(s => { s.value = f.cat.value; }); refresh(); });
       if (f.tgt) f.tgt.addEventListener('change', () => { box.querySelectorAll('select[name^=act]').forEach(s => { s.value = published() ? 'skip' : 'version'; }); });
       box.addEventListener('input', e => { if (e.target.matches('[name^=nm]')) refresh(); }); box.addEventListener('change', e => { if (e.target.matches('[name^=ct]')) refresh(); });
+      box.addEventListener('click', e => {
+        const t = e.target.closest('button'); if (!t) return;
+        if (t.id === 'bmore') { inp.click(); return; }
+        if (t.id === 'bclear') { entries = []; figs = {}; draw(); return; }
+        if (t.dataset.rm) { sync(); entries = entries.filter(x => x.id !== +t.dataset.rm); draw(); }
+        if (t.dataset.rmg) { sync(); entries = entries.filter(x => baseOf(x) !== t.dataset.rmg); draw(); }
+      });
+      f._bulk = () => { sync(); return {entries, figs}; };
       draw();
     },
     onSubmit: async (fd, f) => {
-      const files = [...f.plots.files].sort((a, b) => a.name.localeCompare(b.name, undefined, {numeric: true}));
-      if (!files.length) throw new Error('Choose the images first.');
-      const tgt = fd.get('tgt') || null, rows = [...f.querySelectorAll('#bulk tr[data-i]')];
-      const all = rows.map(r => { const i = +r.dataset.i, file = files[i]; return {file, stem: file.name.replace(/\.[^.]+$/, ''), name: (fd.get('nm' + i) || '').trim(), era: (fd.get('era' + i) || '').trim(), cid: fd.get('ct' + i), loc: (fd.get('loc' + i) || '').trim(), act: fd.get('act' + i) || 'version', fig: an ? (fd.get('fig' + r.dataset.g) || '').trim() : ''}; });
-      const seen = new Set(); all.forEach(it => { if (!it.name) throw new Error(`Give “${it.file.name}” a plot name.`); const k = it.cid + '\u0000' + it.name; if (seen.has(k)) throw new Error(`Two files are called “${it.name}” in the same category. Rename one.`); seen.add(k); });
+      const {entries, figs} = f._bulk(); if (!entries.length) throw new Error('Choose the images first.');
+      const tgt = fd.get('tgt') || null;
+      const all = [...entries].sort((a, b) => a.file.name.localeCompare(b.file.name, undefined, {numeric: true})).map(e => ({file: e.file, stem: e.stem, name: e.name.trim(), era: e.era.trim(), cid: e.cid, loc: e.loc.trim(), act: e.act, fig: an ? (figs[splitEra(e.stem).base] || '').trim() : ''}));
+      const seen = new Set(); all.forEach(it => { if (!it.name) throw new Error(`Give “${it.file.name}” a plot name.`); const k = it.cid + '\u0000' + it.name; if (seen.has(k)) throw new Error(`Two files are called “${it.name}” in the same category. Rename one or leave one out with ✕.`); seen.add(k); });
       all.forEach(it => { it.ex = S.plots.find(p => p.catId === it.cid && p.name === it.name); if (it.fig === '' && an) { const m = it.loc.match(/\bfig(?:ure)?\.?\s*([\w.\-]+)/i); if (m) it.fig = m[1]; } });
       const items = all.filter(it => !(it.ex && it.act === 'skip')), skipped = all.length - items.length;
       if (!items.length) throw new Error('Nothing to upload: every plot already exists and is set to be skipped.');
