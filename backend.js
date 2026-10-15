@@ -92,11 +92,14 @@ function migrate(st) {                                    // older files get the
   st.an_comments = st.an_comments || [];
   st.an_comments.forEach(c => { c.source = c.source || 'an'; c.kind = c.kind || 'text'; c.answer = c.answer || ''; c.meeting = c.meeting || ''; c.meeting_date = c.meeting_date || ''; if (c.anchor === undefined) c.anchor = null; });
   st.usages.forEach(u => { u.panel = u.panel || ''; u.reviews.forEach(r => { r.answer = r.answer || ''; if (r.anchor === undefined) r.anchor = null; r.scope = r.scope || 'panel'; r.resolved_more = r.resolved_more || []; }); });
-  st.an_versions.forEach(v => { if (v.pdf === undefined) v.pdf = null; });
+  st.an_versions.forEach(v => { if (v.pdf === undefined) v.pdf = null; v.change_summary = v.change_summary || ''; });
+  st.categories.forEach(c => { if (c.parent_id === undefined) c.parent_id = null; });
+  st.plots.forEach(p => { p.location = p.location || ''; });
+  st.working = st.working || {name: '', entries: [], summary_md: null};
   if (st.analysis && st.analysis.presented === undefined) st.analysis.presented = false;
   return st;
 }
-const newState = () => ({format: 2, analysis: null, an_versions: [], categories: [], plots: [], plot_versions: [], usages: [], documents: [], files: [], an_comments: []});
+const newState = () => ({format: 2, analysis: null, an_versions: [], categories: [], plots: [], plot_versions: [], usages: [], documents: [], files: [], an_comments: [], working: {name: '', entries: [], summary_md: null}});
 
 /* One atomic commit: blobs -> tree -> commit -> fast-forward the branch. Throws {conflict:true} if someone pushed meanwhile. */
 async function commit(head, changes, message) {
@@ -253,7 +256,8 @@ function ghForget() {            // drop the current connection from this device
 /* ============================ rules (ported from the server version) ============================ */
 const TYPES = ['note', 'tmp', 'group', 'internal', 'collab', 'meeting'];   // tmp/group/internal/collab only exist in older data; new records use 'note' or 'meeting'
 const NEW_TYPES = ['note', 'meeting'];
-const KINDS = ['text', 'table', 'equation', 'general', 'figure'];
+const KINDS = ['text', 'table', 'equation', 'general', 'figure', 'methodology'];
+const OPEN_STATES = ['pending', 'in_progress'];          // 'pending' is shown as "Open"
 
 function anFields(b, ex) {
   const stage = sv(b, 'stage', 20, true, ex ? ex.stage : '');
@@ -271,7 +275,7 @@ const summary = st => {
   const a = st.analysis, rv = st.usages.flatMap(u => u.reviews);
   return {...a, plots: st.plots.length, versions: st.an_versions.length,
     latest_version: st.an_versions.length ? Math.max(...st.an_versions.map(v => v.number)) : null,
-    pending: rv.filter(r => !r.none && r.status === 'pending').length + (st.an_comments || []).filter(c => c.status === 'pending').length};
+    pending: rv.filter(r => !r.none && r.status !== 'resolved').length + (st.an_comments || []).filter(c => c.status !== 'resolved').length};
 };
 async function listAnalyses() {
   const head = await getHead(), ids = (await listDir('analyses', head)).filter(d => d.type === 'dir').map(d => d.name);
@@ -344,6 +348,17 @@ const H = {
     return {app: 'analysis-tracker', version: 3, state: st, images};
   },
 
+  /* ---- the working (unreleased) AN version: its name, the analyst's own change notes, and an optionally edited summary ---- */
+  updateWorking: ({aid}, b) => tx(aid, st => {
+    const w = st.working; if (b.name !== undefined) w.name = sv(b, 'name', 60);
+    if (b.summary_md !== undefined) w.summary_md = b.summary_md === null ? null : sv(b, 'summary_md', 60000);
+    return {ok: true};
+  }, {message: 'Update working version'}),
+  addWorkingEntry: ({aid}, b) => tx(aid, st => {
+    const section = sv(b, 'section', 20, true); if (!['plots', 'methodology', 'other'].includes(section)) throw E(400, 'Invalid section');
+    const e = {id: nid(), section, text: sv(b, 'text', 3000, true), author: ME().name, created: now()}; st.working.entries.push(e); return {id: e.id};
+  }, {message: 'Record a change'}),
+  deleteWorkingEntry: ({aid, id}) => tx(aid, st => { byId(st.working.entries, id, 'Entry'); st.working.entries = st.working.entries.filter(e => e.id !== id); return {ok: true}; }, {message: 'Remove a recorded change'}),
   /* ---- AN versions ---- */
   publish: ({aid}, b) => tx(aid, st => {
     const a = st.analysis; if (a.stage !== 'an_stage') throw E(400, 'Only analyses at the AN stage can publish AN versions');
@@ -353,7 +368,8 @@ const H = {
     if (st.an_versions.some(v => v.number === num)) throw E(409, `Version ${num} already exists`);
     const pub = dateOk(sv(b, 'published_on', 10, false, todayStr()), 'published_on'), notes = sv(b, 'notes', 2000);
     const prev = [...st.an_versions].filter(v => v.number < num).sort((x, y) => y.number - x.number)[0], vid = nid();
-    st.an_versions.push({id: vid, analysis_id: a.id, number: num, published_on: pub, notes, pdf: pdfInfo(b.pdf), status: 'published', created: now()});
+    st.an_versions.push({id: vid, analysis_id: a.id, number: num, published_on: pub, notes, pdf: pdfInfo(b.pdf), change_summary: sv(b, 'change_summary', 60000), status: 'published', created: now()});
+    st.working = {name: '', entries: [], summary_md: null};      // the working version starts over for the next release
     // Stamp the unreleased working draft with this version: it becomes this version's historical record.
     st.plot_versions.forEach(v => { if (!v.an_version_id) v.an_version_id = vid; });
     st.usages.forEach(u => { if (!u.an_version_id && u.type === 'note') u.an_version_id = vid; });   // meeting records are not tied to an AN version
@@ -397,12 +413,30 @@ const H = {
 
   /* ---- categories / plots ---- */
   createCategory: ({aid}, b) => tx(aid, st => {
-    const name = sv(b, 'name', 100, true);
-    if (st.categories.some(c => c.name === name)) throw E(409, 'Category already exists');
-    const c = {id: nid(), analysis_id: st.analysis.id, name}; st.categories.push(c); return {id: c.id};
+    const name = sv(b, 'name', 100, true), parent = b.parent_id ? byId(st.categories, b.parent_id, 'Category') : null, pid = parent ? parent.id : null;
+    if (parent && catDepth(st, parent.id) >= 4) throw E(400, 'Categories can be nested up to 5 levels deep');
+    if (st.categories.some(c => (c.parent_id || null) === pid && c.name === name)) throw E(409, 'A category with this name already exists here');
+    const c = {id: nid(), analysis_id: st.analysis.id, name, parent_id: pid}; st.categories.push(c);
+    const subs = Array.isArray(b.subs) ? b.subs.slice(0, 40) : [];                           // optional subcategories created together with the category
+    for (const s of subs) { const n = typeof s === 'string' ? s.trim() : ''; if (!n) continue; if (n.length > 100) throw E(400, 'A subcategory name is too long');
+      if (!st.categories.some(x => x.parent_id === c.id && x.name === n)) st.categories.push({id: nid(), analysis_id: st.analysis.id, name: n, parent_id: c.id}); }
+    return {id: c.id};
   }, {message: 'Add category'}),
+  updateCategory: ({aid, id}, b) => tx(aid, st => {
+    const c = byId(st.categories, id, 'Category'), name = sv(b, 'name', 100, false, c.name) || c.name;
+    const pid = b.parent_id === undefined ? (c.parent_id || null) : (b.parent_id || null);
+    if (pid) {
+      byId(st.categories, pid, 'Category');
+      if (pid === c.id || catAncestors(st, pid).includes(c.id)) throw E(400, 'A category cannot be moved inside itself');
+      if (catDepth(st, pid) + 1 + catHeight(st, c.id) > 4) throw E(400, 'Categories can be nested up to 5 levels deep');
+    }
+    if (st.categories.some(x => x.id !== c.id && (x.parent_id || null) === pid && x.name === name)) throw E(409, 'A category with this name already exists there');
+    c.name = name; c.parent_id = pid; return {ok: true};
+  }, {message: 'Edit category'}),
   deleteCategory: ({aid, id}, b) => tx(aid, st => {
-    const c = byId(st.categories, id, 'Category'); if (st.plots.some(p => p.category_id === c.id)) throw E(409, 'Category is not empty');
+    const c = byId(st.categories, id, 'Category');
+    if (st.plots.some(p => p.category_id === c.id)) throw E(409, 'Category is not empty: it still contains plots');
+    if (st.categories.some(x => x.parent_id === c.id)) throw E(409, 'Category has subcategories: delete or move them first');
     st.categories = st.categories.filter(x => x.id !== c.id); return {ok: true};
   }, {message: 'Delete category'}),
   async upload({aid}, b, o) {
@@ -420,9 +454,14 @@ const H = {
   createPlot: ({aid}, b) => tx(aid, (st, io) => {
     const cat = byId(st.categories, sv(b, 'category_id', 40, true), 'Category'), name = sv(b, 'name', 150, true);
     if (st.plots.some(p => p.category_id === cat.id && p.name === name)) throw E(409, 'A plot with this name already exists in that category');
-    const p = {id: nid(), analysis_id: st.analysis.id, category_id: cat.id, name, created: now()}; st.plots.push(p);
+    const p = {id: nid(), analysis_id: st.analysis.id, category_id: cat.id, name, location: sv(b, 'location', 200), created: now()}; st.plots.push(p);
     const vid = makeVersion(st, io, p.id, b.version || {}); return {id: p.id, version_id: vid};
   }, {message: 'Add plot'}),
+  updatePlot: ({aid, id}, b) => tx(aid, st => {
+    const p = byId(st.plots, id, 'Plot'), name = sv(b, 'name', 150, false, p.name) || p.name, cid = b.category_id ? byId(st.categories, b.category_id, 'Category').id : p.category_id;
+    if (st.plots.some(x => x.id !== p.id && x.category_id === cid && x.name === name)) throw E(409, 'A plot with this name already exists in that category');
+    p.name = name; p.category_id = cid; if (b.location !== undefined) p.location = sv(b, 'location', 200); return {ok: true};
+  }, {message: 'Edit plot details'}),
   createVersion: ({aid, pid}, b) => tx(aid, (st, io) => { byId(st.plots, pid, 'Plot'); return {id: makeVersion(st, io, pid, b)}; }, {message: 'Save new plot version'}),
   deleteVersion: ({aid, id}) => tx(aid, (st, io) => {
     const v = byId(st.plot_versions, id, 'Version'), ids = descendants(st, v.id);
@@ -463,9 +502,17 @@ const H = {
   updateReview: ({aid, id}, b) => tx(aid, st => {
     const rv = findReview(st, id), {f, st: s0} = reviewFields(b); let s = f.none ? 'pending' : s0;
     if (s === 'resolved' && rv.status !== 'resolved') throw E(400, 'Use the resolve action to mark feedback as resolved');
-    if (s === 'pending' && rv.status === 'resolved') rv.resolved_at = null;
+    if (s !== 'resolved' && rv.status === 'resolved') rv.resolved_at = null;
     Object.assign(rv, f, {status: s, resolved_version_id: s === 'resolved' ? rv.resolved_version_id : null}); return {ok: true};
   }, {message: 'Edit feedback'}),
+  setReviewStatus: ({aid, id}, b) => tx(aid, st => {
+    const rv = findReview(st, id), s = sv(b, 'status', 12, true); if (!OPEN_STATES.includes(s)) throw E(400, 'Use the resolve action to mark a comment as resolved');
+    if (rv.status === 'resolved') throw E(400, 'Reopen the comment first'); rv.status = s; return {ok: true};
+  }, {message: 'Set comment status'}),
+  setAnCommentStatus: ({aid, id}, b) => tx(aid, st => {
+    const c = byId(st.an_comments, id, 'Comment'), s = sv(b, 'status', 12, true); if (!OPEN_STATES.includes(s)) throw E(400, 'Use the resolve action to mark a comment as resolved');
+    if (c.status === 'resolved') throw E(400, 'Reopen the comment first'); c.status = s; return {ok: true};
+  }, {message: 'Set comment status'}),
   deleteReview: ({aid, id}) => tx(aid, st => {
     const rv = findReview(st, id); st.plot_versions.forEach(v => { if (v.review_id === rv.id) v.review_id = null; });
     const u = st.usages.find(x => x.id === rv.usage_id); u.reviews = u.reviews.filter(x => x.id !== rv.id); return {ok: true};
@@ -543,6 +590,9 @@ function anCommentFields(b, source = 'an') {
   if (source === 'meeting') { f.meeting = sv(b, 'meeting', 100, true); f.meeting_date = dateOk(sv(b, 'meeting_date', 10), 'meeting_date'); }
   return f;
 }
+const catAncestors = (st, id) => { const out = []; let c = st.categories.find(x => x.id === id); while (c && c.parent_id) { out.push(c.parent_id); c = st.categories.find(x => x.id === c.parent_id); } return out; };
+const catDepth = (st, id) => catAncestors(st, id).length;                               // 0 = top level
+const catHeight = (st, id) => { const kids = st.categories.filter(x => x.parent_id === id); return kids.length ? 1 + Math.max(...kids.map(k => catHeight(st, k.id))) : 0; };
 function dropStoredPdf(st, io, pdf) {                        // remove the stored PDF file from the repository
   const f = st.files.find(x => x.id === pdf.file_id); if (!f) return;
   st.files = st.files.filter(x => x !== f);
@@ -572,7 +622,7 @@ function usageFields(b, typ) {
 }
 function reviewFields(b) {
   const none = !!b.none, text = sv(b, 'text', 5000, !none), s = sv(b, 'status', 10, false, 'pending') || 'pending';
-  if (!['pending', 'resolved'].includes(s)) throw E(400, 'Invalid status');
+  if (!['pending', 'in_progress', 'resolved'].includes(s)) throw E(400, 'Invalid status');
   return {f: {role: sv(b, 'role', 60, true), name: sv(b, 'name', 100), none, text: none ? '' : text}, st: s};
 }
 function docFields(st, b) {
@@ -590,7 +640,7 @@ function makeVersion(st, io, plotId, b, parent = null, reviewId = null, fnameBas
   let num, rev;
   if (parent) { num = parent.num; rev = Math.max(0, ...vs.filter(v => v.num === num).map(v => v.rev)) + 1; }
   else { num = Math.max(0, ...vs.map(v => v.num)) + 1; rev = 0; }
-  const dflt = `${p.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')}_v${num}`;
+  const dflt = `${p.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')}_v${num}${rev ? '_r' + rev : ''}`;
   const base = (fnameBase || sv(b, 'file_name', 150) || dflt).replace(/[^\w.\-]+/g, '-').replace(/^[-_.]+|[-_.]+$/g, '').slice(0, 150) || 'plot';
   const v = {id: nid(), analysis_id: st.analysis.id, plot_id: plotId, num, rev, parent_id: parent ? parent.id : null, review_id: reviewId, file_id: fid, ext: up.ext, an_version_id: null,
     summary: sv(b, 'summary', 140, true), changes: sv(b, 'changes', 3000, true), motivation: sv(b, 'motivation', 3000), dataset: sv(b, 'dataset', 500), code: sv(b, 'code', 500),
@@ -624,7 +674,9 @@ const ROUTES = [
   R('GET', A_ + '$', H.getAnalysis), R('PATCH', A_ + '$', H.updateAnalysis), R('DELETE', A_ + '$', H.deleteAnalysis), R('GET', A_ + '\\/export$', H.exportAnalysis),
   R('POST', A_ + '\\/versions$', H.publish), R('PATCH', A_ + `\\/versions\\/(?<id>${ID})$`, H.updateVersion),
   R('POST', A_ + `\\/versions\\/(?<id>${ID})\\/pdf$`, H.setVersionPdf), R('DELETE', A_ + `\\/versions\\/(?<id>${ID})\\/pdf$`, H.removeVersionPdf),
-  R('POST', A_ + '\\/categories$', H.createCategory), R('DELETE', A_ + `\\/categories\\/(?<id>${ID})$`, H.deleteCategory),
+  R('POST', A_ + '\\/categories$', H.createCategory), R('PATCH', A_ + `\\/categories\\/(?<id>${ID})$`, H.updateCategory),
+  R('PATCH', A_ + `\\/plots\\/(?<id>${ID})$`, H.updatePlot), R('POST', A_ + '\\/working$', H.updateWorking), R('POST', A_ + '\\/working\\/entries$', H.addWorkingEntry), R('DELETE', A_ + `\\/working\\/entries\\/(?<id>${ID})$`, H.deleteWorkingEntry),
+  R('POST', A_ + `\\/reviews\\/(?<id>${ID})\\/status$`, H.setReviewStatus), R('POST', A_ + `\\/an-comments\\/(?<id>${ID})\\/status$`, H.setAnCommentStatus), R('DELETE', A_ + `\\/categories\\/(?<id>${ID})$`, H.deleteCategory),
   R('POST', A_ + '\\/upload$', H.upload),
   R('POST', A_ + '\\/plots$', H.createPlot), R('DELETE', A_ + `\\/plots\\/(?<id>${ID})$`, H.deletePlot),
   R('POST', A_ + `\\/plots\\/(?<pid>${ID})\\/versions$`, H.createVersion), R('DELETE', A_ + `\\/plot-versions\\/(?<id>${ID})$`, H.deleteVersion),

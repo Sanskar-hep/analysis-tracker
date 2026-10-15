@@ -39,7 +39,7 @@
     S.usages.filter(u => u.type === 'note' && u.anvId === vid).forEach(u => u.reviews.filter(r => !r.none).forEach(r => out.push({kind: 'rev', id: r.id, text: r.text, label: 'Fig ' + u.fig + (u.panel && r.scope !== 'figure' ? ' · ' + u.panel : ''), who: whoStr(r), status: r.status, answer: r.answer, anchor: r.anchor})));
     return out;
   }
-  const cls = it => it.status === 'resolved' ? 'resolved' : (it.answer || '').trim() ? 'answered' : 'pending';
+  const cls = it => it.status === 'resolved' ? 'resolved' : it.status === 'in_progress' ? 'inprogress' : (it.answer || '').trim() ? 'answered' : 'pending';
 
   async function openFile(file, fromStore) {
     await ensureLib();

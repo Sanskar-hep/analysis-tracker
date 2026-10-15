@@ -66,6 +66,21 @@ The preview uses a fake in-memory GitHub, so data disappears when you stop it.
 - **Moving through versions:** each published AN version keeps its own figures and comments; unreleased work lives in the
   working draft until you publish.
 
+## Organising plots and preparing the next AN release
+- **Categories and subcategories:** build a folder-like tree (for example Electron -> Data/MC Comparisons, HLT Efficiency).
+  A plot can sit directly under a category or in any subcategory. Each plot also records its **location in the AN**
+  (page, section or figure number). Plots and comments are independent: a plot does not need a comment.
+- **The working version** (Prepare release): always contains every plot at its newest version, compared with the last released
+  AN version. Each plot is shown as **New**, **Updated** or **Unchanged**. Uploading or updating a plot updates the working
+  version automatically; older plot versions stay in the plot's history, and released AN versions are never changed.
+- **Comments:** besides comments on plots, record **methodology**, **general** and text/table comments with your response, the
+  action taken and a status (Open, In progress, Resolved). They need no plot.
+- **Change summary:** generated from what is recorded (updated and new plots, comments addressed, methodology changes,
+  unchanged plots, still open). Add your own explanations with *Record a change*, edit the text if you like, and it is saved
+  with the version when you publish.
+- **Download ZIP:** one package, for example `AN_v3.zip`, with every plot in the category / subcategory folders,
+  `Review_Comments/Comments_and_Responses.md`, `Review_Comments/Change_Summary.md` and `Plot_Inventory.csv`.
+
 ## The AN PDF and highlighting
 When you add an AN version you can choose its PDF and tick **Store the PDF in your private data repository** (up to 50 MB).
 Stored PDFs open automatically on every device and for everyone who has access to the data repository
@@ -87,6 +102,7 @@ The text is split into separate comments in your browser (cover note, greetings 
 - `index.html`, `app.js`, `style.css` - interface
 - `emailparse.js` - splits a pasted email into comments
 - `pdfview.js` + `vendor/pdfjs/` - the PDF viewer (PDF.js, Apache-2.0)
+- `release.js` - the working version, change summary and ZIP package
 - `backend.js` - storage layer (git commits through the GitHub API) and all the rules
 - `config.js` - optional default repository
 - `server-version/` - the earlier Python-server edition with real server-side accounts (not used on GitHub)
