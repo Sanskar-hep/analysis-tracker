@@ -94,8 +94,9 @@ function migrate(st) {                                    // older files get the
   st.usages.forEach(u => { u.panel = u.panel || ''; u.reviews.forEach(r => { r.answer = r.answer || ''; if (r.anchor === undefined) r.anchor = null; r.scope = r.scope || 'panel'; r.resolved_more = r.resolved_more || []; }); });
   st.an_versions.forEach(v => { if (v.pdf === undefined) v.pdf = null; v.change_summary = v.change_summary || ''; });
   st.categories.forEach(c => { if (c.parent_id === undefined) c.parent_id = null; });
-  st.plots.forEach(p => { p.location = p.location || ''; });
-  st.working = st.working || {name: '', entries: [], summary_md: null};
+  st.plots.forEach(p => { p.location = p.location || ''; p.era = p.era || ''; });
+  st.plot_versions.forEach(v => { v.reviewed = !!v.reviewed; });
+  st.working = st.working || {name: '', entries: [], summary_md: null, summary_reviewed: false};
   if (st.analysis && st.analysis.presented === undefined) st.analysis.presented = false;
   return st;
 }
@@ -352,6 +353,7 @@ const H = {
   updateWorking: ({aid}, b) => tx(aid, st => {
     const w = st.working; if (b.name !== undefined) w.name = sv(b, 'name', 60);
     if (b.summary_md !== undefined) w.summary_md = b.summary_md === null ? null : sv(b, 'summary_md', 60000);
+    if (b.summary_reviewed !== undefined) w.summary_reviewed = !!b.summary_reviewed;
     return {ok: true};
   }, {message: 'Update working version'}),
   addWorkingEntry: ({aid}, b) => tx(aid, st => {
@@ -369,7 +371,7 @@ const H = {
     const pub = dateOk(sv(b, 'published_on', 10, false, todayStr()), 'published_on'), notes = sv(b, 'notes', 2000);
     const prev = [...st.an_versions].filter(v => v.number < num).sort((x, y) => y.number - x.number)[0], vid = nid();
     st.an_versions.push({id: vid, analysis_id: a.id, number: num, published_on: pub, notes, pdf: pdfInfo(b.pdf), change_summary: sv(b, 'change_summary', 60000), status: 'published', created: now()});
-    st.working = {name: '', entries: [], summary_md: null};      // the working version starts over for the next release
+    st.working = {name: '', entries: [], summary_md: null, summary_reviewed: false};      // the working version starts over for the next release
     // Stamp the unreleased working draft with this version: it becomes this version's historical record.
     st.plot_versions.forEach(v => { if (!v.an_version_id) v.an_version_id = vid; });
     st.usages.forEach(u => { if (!u.an_version_id && u.type === 'note') u.an_version_id = vid; });   // meeting records are not tied to an AN version
@@ -434,9 +436,17 @@ const H = {
     c.name = name; c.parent_id = pid; return {ok: true};
   }, {message: 'Edit category'}),
   deleteCategory: ({aid, id}, b) => tx(aid, st => {
-    const c = byId(st.categories, id, 'Category');
-    if (st.plots.some(p => p.category_id === c.id)) throw E(409, 'Category is not empty: it still contains plots');
-    if (st.categories.some(x => x.parent_id === c.id)) throw E(409, 'Category has subcategories: delete or move them first');
+    const c = byId(st.categories, id, 'Category'), plots = st.plots.filter(p => p.category_id === c.id), kids = st.categories.filter(x => x.parent_id === c.id);
+    if (plots.length || kids.length) {                       // not empty: its contents must be moved somewhere (published plots are never deleted)
+      const top = b.move_to === '__top', dest = b.move_to && !top ? byId(st.categories, b.move_to, 'Category') : null;
+      if (!b.move_to) throw E(409, 'Category is not empty: choose where to move its plots and subcategories');
+      if (plots.length && !dest) throw E(400, 'Plots need a category: choose where to move them');
+      if (dest) { const inside = new Set([c.id]); let grow = true; while (grow) { grow = false; st.categories.forEach(x => { if (!inside.has(x.id) && inside.has(x.parent_id)) { inside.add(x.id); grow = true; } }); } if (inside.has(dest.id)) throw E(400, 'Choose a different category: it cannot be inside the one being deleted'); }
+      const pid = dest ? dest.id : null;
+      kids.forEach(k => { if (st.categories.some(x => x.id !== k.id && x.parent_id === pid && x.name.toLowerCase() === k.name.toLowerCase() && x.id !== c.id)) throw E(409, `The destination already has a subcategory called “${k.name}”`); });
+      plots.forEach(p => { if (st.plots.some(x => x.category_id === pid && x.name === p.name)) throw E(409, `The destination already has a plot called “${p.name}”`); });
+      kids.forEach(k => { k.parent_id = pid; }); plots.forEach(p => { p.category_id = pid; });
+    }
     st.categories = st.categories.filter(x => x.id !== c.id); return {ok: true};
   }, {message: 'Delete category'}),
   async upload({aid}, b, o) {
@@ -454,7 +464,7 @@ const H = {
   createPlot: ({aid}, b) => tx(aid, (st, io) => {
     const cat = byId(st.categories, sv(b, 'category_id', 40, true), 'Category'), name = sv(b, 'name', 150, true);
     if (st.plots.some(p => p.category_id === cat.id && p.name === name)) throw E(409, 'A plot with this name already exists in that category');
-    const p = {id: nid(), analysis_id: st.analysis.id, category_id: cat.id, name, location: sv(b, 'location', 200), created: now()}; st.plots.push(p);
+    const p = {id: nid(), analysis_id: st.analysis.id, category_id: cat.id, name, location: sv(b, 'location', 200), era: sv(b, 'era', 40), created: now()}; st.plots.push(p);
     const vid = makeVersion(st, io, p.id, b.version || {});
     if (b.an_version_id) { const av = byId(st.an_versions, sv(b, 'an_version_id', 40, true), 'AN version'); st.plot_versions.find(v => v.id === vid).an_version_id = av.id; }   // plot of an already published AN version (first version only)
     return {id: p.id, version_id: vid};
@@ -462,9 +472,11 @@ const H = {
   updatePlot: ({aid, id}, b) => tx(aid, st => {
     const p = byId(st.plots, id, 'Plot'), name = sv(b, 'name', 150, false, p.name) || p.name, cid = b.category_id ? byId(st.categories, b.category_id, 'Category').id : p.category_id;
     if (st.plots.some(x => x.id !== p.id && x.category_id === cid && x.name === name)) throw E(409, 'A plot with this name already exists in that category');
-    p.name = name; p.category_id = cid; if (b.location !== undefined) p.location = sv(b, 'location', 200); return {ok: true};
+    p.name = name; p.category_id = cid; if (b.location !== undefined) p.location = sv(b, 'location', 200); if (b.era !== undefined) p.era = sv(b, 'era', 40); return {ok: true};
   }, {message: 'Edit plot details'}),
   createVersion: ({aid, pid}, b) => tx(aid, (st, io) => { byId(st.plots, pid, 'Plot'); return {id: makeVersion(st, io, pid, b)}; }, {message: 'Save new plot version'}),
+  /* the analyst's own check of a revised plot (separate from the comment being resolved) */
+  setVersionReviewed: ({aid, id}, b) => tx(aid, st => { const v = byId(st.plot_versions, id, 'Version'); v.reviewed = !!b.reviewed; v.reviewed_at = v.reviewed ? now() : null; v.reviewed_by = v.reviewed ? ME().name : ''; return {ok: true}; }, {message: 'Mark plot revision as reviewed'}),
   deleteVersion: ({aid, id}) => tx(aid, (st, io) => {
     const v = byId(st.plot_versions, id, 'Version'), ids = descendants(st, v.id);
     if (ids.some(i => st.plot_versions.find(x => x.id === i).an_version_id)) throw E(409, 'This plot version belongs to a published AN version and is kept as a historical record');
@@ -702,6 +714,7 @@ const ROUTES = [
   R('POST', A_ + `\\/reviews\\/(?<id>${ID})\\/status$`, H.setReviewStatus), R('POST', A_ + `\\/an-comments\\/(?<id>${ID})\\/status$`, H.setAnCommentStatus), R('DELETE', A_ + `\\/categories\\/(?<id>${ID})$`, H.deleteCategory),
   R('POST', A_ + '\\/upload$', H.upload),
   R('POST', A_ + '\\/plots$', H.createPlot), R('DELETE', A_ + `\\/plots\\/(?<id>${ID})$`, H.deletePlot),
+  R('POST', A_ + `\\/plot-versions\\/(?<id>${ID})\\/reviewed$`, H.setVersionReviewed),
   R('POST', A_ + `\\/plots\\/(?<pid>${ID})\\/versions$`, H.createVersion), R('DELETE', A_ + `\\/plot-versions\\/(?<id>${ID})$`, H.deleteVersion),
   R('POST', A_ + '\\/usages$', H.createUsage), R('PATCH', A_ + `\\/usages\\/(?<id>${ID})$`, H.updateUsage), R('DELETE', A_ + `\\/usages\\/(?<id>${ID})$`, H.deleteUsage),
   R('POST', A_ + `\\/usages\\/(?<uid>${ID})\\/reviews$`, H.createReview),

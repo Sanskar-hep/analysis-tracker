@@ -89,7 +89,7 @@ const catChain = id => { const out = []; let c = cat(id); while (c) { out.unshif
 const catPath = id => catChain(id).map(c => c.name).join(' / ');
 const catWithKids = id => [id, ...catKids(id).flatMap(k => catWithKids(k.id))];
 const catOptions = (selected, skip) => { const out = []; const walk = (pid, d) => catKids(pid).forEach(c => { if (skip && catWithKids(skip).includes(c.id)) return; out.push(`<option value="${c.id}" ${c.id === selected ? 'selected' : ''}>${'\u00a0\u00a0'.repeat(d)}${d ? '↳ ' : ''}${esc(c.name)}</option>`); walk(c.id, d + 1); }); walk(null, 0); return out.join(''); };
-const crumbsFor = catId => `<a href="${L('')}">Dashboard</a>${catChain(catId).map(c => ` / <a href="${L('/cat/' + c.id)}">${esc(c.name)}</a>`).join('')}`;
+const crumbsFor = catId => `<a href="${L('/gallery')}">Plot Gallery</a>${catChain(catId).map(c => ` / <a href="${L('/cat/' + c.id)}">${esc(c.name)}</a>`).join('')}`;
 const verLabel = v => v.rev ? `v${v.num}.${v.rev}` : `v${v.num}`;
 const byVer = (a, b) => a.num - b.num || a.rev - b.rev;
 const visV = v => { const c = ctx(); return c.draft || (v.anvId && anv(v.anvId).number <= c.num); };
@@ -110,19 +110,36 @@ const pendingKind = k => allPending().filter(e => entryKind(e) === k);
 const BLANK = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
 const img = (v, cls = '') => v ? `<img class="${cls}" data-fid="${v.file_id}" data-ext="${v.ext}" src="${BLANK}" alt="${esc(plot(v.plotId)?.name)} ${verLabel(v)}">` : '';
 /* images are fetched from the repository on demand, then cached as blob URLs */
+let IO = null;
 function hydrateImages() {
+  const load = el => { const fid = el.dataset.fid;
+    fetchImage(S.an.id, fid, el.dataset.ext).then(u => document.querySelectorAll(`img[data-fid="${fid}"]`).forEach(x => { x.src = u; x.dataset.ok = 1; }))
+      .catch(() => { el.alt = 'Image could not be loaded'; }); };
+  if (IO) IO.disconnect();
+  IO = 'IntersectionObserver' in window ? new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) { IO.unobserve(e.target); if (!e.target.dataset.ok) load(e.target); } }), {rootMargin: '500px'}) : null;
   document.querySelectorAll('img[data-fid]:not([data-ok])').forEach(el => {
-    const fid = el.dataset.fid, url = imgCached(fid);
+    const url = imgCached(el.dataset.fid);
     if (url) { el.src = url; el.dataset.ok = 1; return; }
     if (!S) return;
-    fetchImage(S.an.id, fid, el.dataset.ext).then(u => document.querySelectorAll(`img[data-fid="${fid}"]`).forEach(x => { x.src = u; x.dataset.ok = 1; }))
-      .catch(() => { el.alt = 'Image could not be loaded'; });
+    if (IO && el.classList.contains('lz')) IO.observe(el); else load(el);       // gallery images load only when they come into view
   });
 }
 const imageUrl = v => fetchImage(S.an.id, v.file_id, v.ext);
 const whoStr = r => `${r.role}${r.name ? ' · ' + r.name : ''}`;
 const useTitle = u => u.type === 'note' ? `Analysis Note · Fig ${u.fig}` : `${meetingName(u)}${u.slide ? ' · slide ' + u.slide : ''}`;
 const findReview = id => { for (const u of S.usages) { const r = u.reviews.find(x => x.id === id); if (r) return {u, r}; } return null; };
+/* figure number as a drop-down of the figures already in the AN (plus “new number…”); the text box below it carries the value */
+const figNums = (extra = []) => [...new Set([...S.usages.filter(x => x.type === 'note').map(x => x.fig), ...extra.filter(Boolean)])].sort((a, b) => a.localeCompare(b, undefined, {numeric: true}));
+function figPick(name, cur = '', attrs = '', optional = true, extra = []) {
+  const nums = figNums(extra), known = !cur || nums.includes(cur);
+  return `<div class="figpick"><select class="figsel">${optional ? '<option value="">— none —</option>' : '<option value="">— choose a figure —</option>'}${nums.map(n => `<option value="${esc(n)}" ${n === cur ? 'selected' : ''}>Figure ${esc(n)}</option>`).join('')}<option value="__new" ${known ? '' : 'selected'}>＋ New figure number…</option></select>`
+    + `<input type="${known ? 'hidden' : 'text'}" name="${name}" ${attrs} maxlength="40" value="${esc(cur)}" placeholder="type the number, e.g. 4.2"></div>`;
+}
+document.addEventListener('change', e => {
+  const sel = e.target; if (!sel.classList || !sel.classList.contains('figsel')) return;
+  const inp = sel.nextElementSibling; if (!inp) return;
+  if (sel.value === '__new') { inp.type = 'text'; inp.value = ''; inp.focus(); } else { inp.type = 'hidden'; inp.value = sel.value; }
+});
 /* the revised plots made for a comment: what changed and why live on the plot versions (one source), and are shown with the response */
 const revNotes = r => [r.resolvedVersionId, ...(r.resolvedMore || [])].map(id => id && ver(id)).filter(Boolean).map(v => ({v, name: plot(v.plotId).name, what: v.changes, why: /^Response to /.test(v.motivation || '') ? '' : (v.motivation || '')}));
 const fullResponse = r => [(r.answer || '').trim(), ...revNotes(r).filter(n => n.why).map(n => `Revised plot ${n.name} (${verLabel(n.v)}): ${n.why}`)].filter(Boolean).join('\n');
@@ -277,31 +294,26 @@ function renderSide() {
     $('#side').innerHTML = `${brand}<div class="nav"><a href="#/" class="on">Analyses</a></div>`;
     return;
   }
-  const sub = route().slice(2), pg = sub[0] || '', k = sub[1];
-  const pend = allPending().length;
-  const catTree = (pid, d) => catKids(pid).map(x => {
-    const n = visPlots().filter(p => catWithKids(x.id).includes(p.catId)).length;
-    return `<a href="${L('/cat/' + x.id)}" class="${pg === 'cat' && k === x.id ? 'on' : ''}" style="padding-left:${10 + d * 14}px"><span>${d ? '↳ ' : ''}${esc(x.name)}</span><span class="count">${n}</span></a>` + catTree(x.id, d + 1);
-  }).join('');
-  const cats = catTree(null, 0);
-  const nav = (href, label, on, count) => `<a href="${href}" class="${on ? 'on' : ''}"><span>${label}</span>${count ? `<span class="count warn">${count}</span>` : ''}</a>`;
-  const reviews = (meetingsOn() ? nav(L('/meetings'), 'Meetings', pg === 'meetings', pendingKind('meeting').length) : '')
-    + (isPub() ? nav(L('/reviewer'), 'AN review (convenors)', pg === 'reviewer', pendingKind('note').length) : '');
+  const pg = route().slice(2)[0] || '', pend = allPending().length;
+  const commentsHref = isPub() ? L('/reviewer') : meetingsOn() ? L('/meetings') : L('/pending');
+  const nav = (href, label, on, count, hint = '') => `<a href="${href}" class="${on ? 'on' : ''}" title="${esc(hint)}"><span>${label}</span>${count ? `<span class="count warn">${count}</span>` : ''}</a>`;
   $('#side').innerHTML = `${brand}
     <a class="backlink" href="#/">← All analyses</a>
     <div class="aname">${esc(S.an.title)}</div>
     <div class="asub">${stageBadges(S.an)}</div>
     <div class="nav">
-      ${nav(L(''), 'Dashboard', !pg)}
-      <div class="sec"><span>Plots</span><button class="iconbtn" data-act="new-cat" title="New category">+</button></div>
-      <div class="sub">${cats || '<div class="meta" style="padding:6px 24px">No categories yet</div>'}</div>
-      ${reviews ? `<div class="sec"><span>Comments</span></div>${reviews}` : ''}
-      ${isAN() ? `<div class="sec"><span>Analysis Note</span></div>${nav(L('/release'), 'Prepare release', pg === 'release')}${nav(L('/versions'), 'AN versions', pg === 'versions')}${nav(L('/docs'), 'Documents', pg === 'docs')}` : ''}
-      <div class="sec"><span>Analysis</span></div>
-      ${pend || isAN() ? nav(L('/pending'), 'All pending comments', pg === 'pending', pend) : ''}
+      ${nav(L(''), 'Overview', !pg, 0, 'Where you stand and what to do next')}
+      ${nav(L('/gallery'), 'Plot Gallery', ['gallery', 'cat', 'plot'].includes(pg), 0, 'All plots, grouped by variable and era')}
+      ${nav(commentsHref, 'Comments', ['reviewer', 'meetings', 'pending'].includes(pg), pend, 'Comments from conveners and meetings, and your answers')}
+      ${isAN() ? nav(L('/versions'), 'Version History', pg === 'versions', 0, 'Published AN versions and plot revisions') : ''}
+      ${isAN() ? nav(L('/release'), 'Release &amp; Export', pg === 'release', 0, 'Check what is ready, then download the package') : ''}
+      <div class="sec"><span>More</span></div>
+      ${isAN() ? nav(L('/docs'), 'Documents', pg === 'docs') : ''}
       ${nav(L('/settings'), 'Settings', pg === 'settings')}
     </div>`;
 }
+const commentTabs = pg => { const t = (href, label, k, n) => `<a class="tab ${pg === k ? 'on' : ''}" href="${href}">${label}${n ? ` <span class="count warn">${n}</span>` : ''}</a>`;
+  return `<div class="tabs">${isPub() ? t(L('/reviewer'), 'Convener comments', 'reviewer', pendingKind('note').length) : ''}${meetingsOn() ? t(L('/meetings'), 'Meeting comments', 'meetings', pendingKind('meeting').length) : ''}${t(L('/pending'), 'Everything pending', 'pending', allPending().length)}</div>`; };
 
 function renderTop() {
   const repos = savedRepos(), repoSel = `<div class="ctxsel" title="Data repository"><span>📁</span><select data-act="setrepo" aria-label="Data repository">
@@ -458,39 +470,38 @@ function commentsChooser() {
     onSubmit: async fd => { if (fd.get('src') === 'an') { setCtx(latestAnv().id); go(L('/reviewer')); } else go(L('/meetings')); render(); }});
 }
 
+/* the three things a new user should do, in order; disappears once they are done */
+function gettingStarted() {
+  const live = rs => rs.some(r => !r.none), hasCom = S.usages.some(u => live(u.reviews)) || S.anc.length > 0;
+  const hasResp = S.usages.some(u => u.reviews.some(r => !r.none && (r.answer || r.status === 'resolved'))) || S.anc.some(c => c.answer || c.status === 'resolved');
+  const steps = [['Upload your plots', 'Select all the images at once. Names like electron_pt_2016postVFP.png are grouped by variable and era for you.', S.plots.length > 0, '<button class="btn primary" data-act="bulk-plots">Upload many plots</button>']];
+  if (isAN()) {
+    steps.push(['Add the comments you received', isPub() ? 'Paste an email from the conveners, or add comments one by one, and link them to your plots.' : 'First record the published AN version, then you can add the conveners’ comments.', hasCom, isPub() ? `<a class="btn" href="${L('/reviewer')}">Add comments</a>` : `<a class="btn" href="${L('/versions')}">Record the AN version</a>`]);
+    steps.push(['Answer them, and revise plots where needed', 'Open a comment, write your response and upload revised plots right there. The change summary writes itself.', hasResp, `<a class="btn" href="${L('/pending')}">Open comments</a>`]);
+    steps.push(['Prepare the next release', 'Check what is ready, then download the whole working version as one ZIP.', false, `<a class="btn" href="${L('/release')}">Release &amp; Export</a>`]);
+  }
+  if (steps.slice(0, 3).every(x => x[2]) || (!isAN() && S.plots.length)) return '';
+  return `<div class="card pad start"><h2 style="margin:0 0 4px">Start here</h2><div class="meta" style="margin-bottom:12px">${steps.length === 1 ? 'Start with this one.' : steps.length + ' steps, in this order.'} Each one is ticked off automatically.</div>
+    ${steps.map((st, i) => `<div class="step ${st[2] ? 'done' : ''}"><span class="num">${st[2] ? '✓' : i + 1}</span><div><b>${st[0]}</b><div class="meta">${st[1]}</div></div><div class="actions">${st[3]}</div></div>`).join('')}</div>`;
+}
 function viewDash() {
-  const pend = allPending(), vp = visPlots(), vv = S.versions.filter(visV), cu = cUsages();
+  const pend = allPending(), vp = visPlots();
   const resolved = S.usages.flatMap(u => u.reviews).filter(r => !r.none && r.status === 'resolved').length + S.anc.filter(c => c.status === 'resolved').length;
-  const cats = catKids(null).map(c => {
-    const ps = vp.filter(p => catWithKids(c.id).includes(p.catId)).sort((a, b) => b.created - a.created), lv = ps.length ? latest(ps[0].id) : null;
-    const nv = ps.reduce((n, p) => n + verOf(p.id).length, 0);
-    return `<div class="card pc" data-go="${L('/cat/' + c.id)}"><div class="th ${lv ? '' : 'empty'}">${lv ? img(lv) : 'No plots yet'}</div><div class="bd"><h3>${esc(c.name)}</h3><div class="meta">${ps.length} plot${ps.length === 1 ? '' : 's'} · ${nv} version${nv === 1 ? '' : 's'}</div></div></div>`;
-  }).join('');
-  const counts = [{k: 'note', c: 'note', label: 'Analysis Note'}, {k: 'meeting', c: 'tmp', label: 'Meetings'}].filter(x => x.k !== 'note' ? meetingsOn() : isAN())
-    .map(x => ({...x, n: cu.filter(u => kindOf(u.type) === x.k).length}));
-  const tot = counts.reduce((a, b) => a + b.n, 0) || 1;
-  const recent = [...vv].sort((a, b) => b.created - a.created).slice(0, 6).map(v => {
+  const recent = [...S.versions.filter(visV)].sort((a, b) => b.created - a.created).slice(0, 6).map(v => {
     const p = plot(v.plotId);
     return `<div class="row" data-go="${L('/plot/' + p.id)}" data-sel="${v.id}">${img(v)}<div class="t"><b>${esc(p.name)} <span class="badge">${verLabel(v)}</span></b><span>${esc(v.summary)}</span></div><span class="meta">${fmtDate(v.created)}</span></div>`;
   }).join('');
-  const anTile = isAN() ? `<div class="card tile"><b style="font-size:18px;line-height:1.4">${esc(S.an.an_name)}</b><span>${esc(S.an.collaboration)} · ${isPub() ? `AN v${latestAnv().number} published` : 'AN being written'}</span>${isPub() ? `<br><button class="link" data-act="open-pdf" data-v="${latestAnv().id}">Open the AN PDF${latestAnv().pdf ? '' : ' …'}</button>` : ''}</div>` : '';
   const showComments = meetingsOn() || isPub();
-  return `${banner()}<div class="pagehead"><div><h1>${esc(S.an.title)}</h1><p>${ctx().draft ? 'Working draft' : ctx().label} · your plots${showComments ? ' and what was said about them' : ''}.</p></div>
-    <div class="actions"><button class="btn primary" data-act="new-plot">+ New plot</button></div></div>
+  return `${banner()}<div class="pagehead"><div><h1>${esc(S.an.title)}</h1><p>${isAN() ? esc(S.an.an_name || '') + (S.an.collaboration ? ' · ' + esc(S.an.collaboration) : '') + ' · ' : ''}${ctx().draft ? 'Working draft' : ctx().label}</p></div>
+    <div class="actions"><a class="btn" href="${L('/gallery')}">Open the Plot Gallery</a><button class="btn primary" data-act="bulk-plots">Upload many plots</button></div></div>
+  ${gettingStarted()}
   <div class="guides">${guideCards()}</div>
-  <div class="tiles">${anTile}
-    <div class="card tile"><b>${vp.length}</b><span>Plots</span></div>
-    <div class="card tile"><b>${vv.length}</b><span>Plot versions</span></div>
+  <div class="tiles"><div class="card tile"><b>${vp.length}</b><span>Plots</span></div>
     ${showComments ? `<div class="card tile ${pend.length ? 'warn' : ''}"><b>${pend.length}</b><span>Pending comments</span></div><div class="card tile"><b>${resolved}</b><span>Comments resolved</span></div>` : ''}</div>
-  <div class="sechead"><h2>Plot categories</h2><button class="btn sm" data-act="new-cat">+ New category</button></div>
-  ${S.cats.length ? `<div class="grid">${cats}</div>` : '<div class="card empty">No categories yet. Create a category (e.g. “Electron pT”) or click <b>New plot</b> to start.</div>'}
   <div class="two">
     ${showComments ? `<div><h2>Needs attention</h2><div class="card" style="margin-top:10px">${pend.slice(0, 6).map(e => pendRow(e)).join('') || '<div class="empty">🎉 No pending comments</div>'}</div>
       ${pend.length > 6 ? `<p><a href="${L('/pending')}">See all ${pend.length} pending →</a></p>` : ''}</div>` : '<div></div>'}
-    <div>${counts.length ? `<h2>Where plots are used${ctx().draft ? '' : ' in ' + ctx().label}</h2>
-      <div class="card pad" style="margin-top:10px"><div class="splitbar">${counts.map(c => c.n ? `<div style="width:${c.n / tot * 100}%;background:var(--${c.c})"></div>` : '').join('')}</div>
-        <div class="legend">${counts.map(c => `<span><i class="dot" style="background:var(--${c.c})"></i>${c.label} <b>${c.n}</b></span>`).join('')}</div></div>` : ''}
-      <h2 style="margin-top:22px">Recent plot versions</h2><div class="card" style="margin-top:10px">${recent || '<div class="empty">Nothing yet</div>'}</div></div>
+    <div><h2>Recent plot revisions</h2><div class="card" style="margin-top:10px">${recent || '<div class="empty">Nothing yet. Upload your plots to begin.</div>'}</div></div>
   </div>`;
 }
 
@@ -572,22 +583,6 @@ function viewReviewer() {
     ${ancShown.length ? ancShown.map(ancCard).join('') : '<div class="card empty">No comments of this kind yet. Use <b>Import comments from email</b> or <b>+ Add comment</b>.</div>'}`;
 }
 
-function viewCat(id) {
-  const c = cat(id); if (!c) return notFound();
-  const kids = catKids(id), ps = visPlots().filter(p => p.catId === id).sort((a, b) => b.created - a.created), all = visPlots().filter(p => catWithKids(id).includes(p.catId));
-  const cards = ps.map(p => { const vs = verOf(p.id), lv = vs.slice(-1)[0];
-    return `<div class="card pc" data-go="${L('/plot/' + p.id)}"><div class="th">${img(lv)}</div><div class="bd"><h3>${esc(p.name)}</h3>
-      <div class="meta">${vs.length} version${vs.length === 1 ? '' : 's'} · latest ${verLabel(lv)}${p.location ? ' · ' + esc(p.location) : ''}</div><div class="badges">${plotBadges(p.id)}</div></div></div>`; }).join('');
-  const subCards = kids.map(k => { const ps2 = visPlots().filter(p => catWithKids(k.id).includes(p.catId)).sort((a, b) => b.created - a.created), lv = ps2.length ? latest(ps2[0].id) : null;
-    return `<div class="card pc" data-go="${L('/cat/' + k.id)}"><div class="th ${lv ? '' : 'empty'}">${lv ? img(lv) : 'No plots yet'}</div><div class="bd"><h3>${esc(k.name)}</h3><div class="meta">Subcategory · ${ps2.length} plot${ps2.length === 1 ? '' : 's'}${catKids(k.id).length ? ' · ' + catKids(k.id).length + ' subcategories' : ''}</div></div></div>`; }).join('');
-  const empty = !S.plots.some(p => p.catId === id) && !kids.length;
-  return `${banner()}<div class="crumbs">${crumbsFor(id)}</div>
-    <div class="pagehead"><div><h1>${esc(c.name)}</h1><p>${all.length} plot${all.length === 1 ? '' : 's'}${kids.length ? ` in ${kids.length} subcategor${kids.length === 1 ? 'y' : 'ies'} and here` : ''}</p></div>
-    <div class="actions"><button class="btn" data-act="new-sub" data-id="${id}">+ Subcategory</button><button class="btn" data-act="edit-cat" data-id="${id}">Rename / move</button>${empty ? `<button class="btn danger" data-act="del-cat" data-id="${id}">Delete</button>` : ''}<button class="btn" data-act="bulk-plots" data-id="${id}">Upload many plots</button><button class="btn primary" data-act="new-plot" data-id="${id}">+ New plot</button></div></div>
-    ${kids.length ? `<div class="sechead"><h2>Subcategories</h2></div><div class="grid">${subCards}</div>` : ''}
-    ${ps.length || !kids.length ? `${kids.length ? '<div class="sechead"><h2>Plots directly in ' + esc(c.name) + '</h2></div>' : ''}${ps.length ? `<div class="grid">${cards}</div>` : '<div class="card empty">No plots in this category' + (ctx().draft ? '' : ' at this AN version') + '. Use <b>+ New plot</b>, or <b>+ Subcategory</b> to organise them further.</div>'}` : ''}`;
-}
-
 function viewPlot(id) {
   const p = plot(id); if (!p) return notFound();
   const vs = verOf(id); if (!vs.length) return `${banner()}<div class="card empty">This plot did not exist yet at ${ctx().label}. <a href="${L('/plot/' + id)}" data-act="to-draft">Open in the working draft</a></div>`;
@@ -610,7 +605,7 @@ function viewPlot(id) {
   const types = ['note', 'meeting'].filter(t => t !== 'note' || isAN()).filter(t => t !== 'meeting' || meetingsOn() || true);
   return `${banner()}<div class="crumbs">${crumbsFor(p.catId)} / ${esc(p.name)}</div>
   <div class="pagehead"><div><h1>${esc(p.name)}</h1><p>${vs.length} version${vs.length === 1 ? '' : 's'}${cx.draft ? '' : ' as of ' + cx.label}<br><span class="meta">Category: ${esc(catPath(p.catId))} · Location in the AN: ${p.location ? '<b>' + esc(p.location) + '</b>' : 'not set'} <button class="link" data-act="edit-plot" data-id="${p.id}">Edit</button></span></p></div>
-    <div class="actions"><button class="btn" data-act="go-cmp" data-id="${id}" ${cmp.length < 2 ? 'disabled' : ''}>Compare ${cmp.length ? '(' + cmp.length + ')' : ''}</button>
+    <div class="actions">${isAN() && REL.inventory().some(x => x.p.id === id && x.status === 'updated') ? `<button class="btn" data-act="gal" data-op="cmp" data-id="${id}">Compare with published</button>` : ''}<button class="btn" data-act="go-cmp" data-id="${id}" ${cmp.length < 2 ? 'disabled' : ''}>Compare ${cmp.length ? '(' + cmp.length + ')' : ''}</button>
     <button class="btn primary" data-act="new-ver" data-id="${id}">+ Save new version</button>
     ${S.versions.some(v => v.plotId === id && v.anvId) ? '' : `<button class="btn danger" data-act="del-plot" data-id="${id}">Delete</button>`}</div></div>
   <div class="split">
@@ -629,6 +624,7 @@ function viewPlot(id) {
           ${sel.dataset ? `<dt>Dataset / selection</dt><dd>${esc(sel.dataset)}</dd>` : ''}
           ${sel.code ? `<dt>Code reference</dt><dd class="mono">${/^https?:/.test(sel.code) ? `<a href="${esc(sel.code)}" target="_blank" rel="noopener noreferrer">${esc(sel.code)}</a>` : esc(sel.code)}</dd>` : ''}
           <dt>File name</dt><dd class="mono">${esc(sel.fileName)}</dd>
+          ${(!sel.anvId && (sel.parentId || sel.num > 1)) ? `<dt>Your review</dt><dd>${sel.reviewed ? `✓ Checked by ${esc(sel.reviewed_by || 'you')} · ${sel.reviewed_at ? fmtDate(sel.reviewed_at) : ''} <button class="link" data-act="rev-ok" data-id="${sel.id}" data-on="0">Undo</button>` : `Not checked yet <button class="btn sm" data-act="rev-ok" data-id="${sel.id}" data-on="1">Mark as reviewed</button><div class="meta">This is your own check of the revised plot. It is separate from the comment being resolved.</div>`}</dd>` : ''}
           <dt>Saved</dt><dd>${fmtDate(sel.created)} by ${esc(sel.author)}</dd>
         </dl>
       </div>
@@ -694,7 +690,7 @@ function viewCompare(id) {
   let stage = '';
   if (sel.length < 2) stage = '<div class="card empty" style="margin-top:18px">Pick at least two versions above (up to five).</div>';
   else if (mode === 'side') stage = `<div class="cmpgrid" style="grid-template-columns:repeat(auto-fit,minmax(${sel.length > 3 ? 300 : 380}px,1fr))">${sel.map(v =>
-    `<div class="card cmpcard"><div class="h"><b>${verLabel(v)}</b><span class="meta">${fmtDate(v.created)}</span></div><div class="im" data-act="zoom" data-id="${v.id}">${img(v)}</div><div class="tx"><b style="color:var(--ink)">Changes:</b> ${esc(v.changes)}</div></div>`).join('')}</div>`;
+    `<div class="card cmpcard"><div class="h"><b>${verLabel(v)}</b> ${v.anvId ? `<span class="badge stage">Published ${anvLabel(anv(v.anvId))}</span>` : '<span class="badge">Working version</span>'}<span class="meta">${esc(v.fileName)} · ${fmtDate(v.created)}</span></div><div class="im" data-act="zoom" data-id="${v.id}">${img(v)}</div><div class="tx"><b style="color:var(--ink)">Changes:</b> ${esc(v.changes)}</div></div>`).join('')}</div>`;
   else stage = `<div class="ctrl"><span>Compare</span><select data-act="pickA">${opts(ui.A)}</select><span>with</span><select data-act="pickB">${opts(ui.B)}</select>
       ${mode === 'swipe' ? '<span class="meta">Drag the slider to reveal</span><input type="range" min="0" max="100" value="50" data-swipe>' : '<span class="meta">Opacity of top plot</span><input type="range" min="0" max="100" value="50" data-opac>'}</div>
       <div class="stage ${mode}">${img(B_)}${img(A_, 'top2')}${mode === 'swipe' ? '<div class="bar"></div>' : ''}
@@ -708,7 +704,7 @@ function viewCompare(id) {
     <div class="modes"><button class="${mode === 'side' ? 'on' : ''}" data-act="mode" data-id="side">Side by side</button>
     <button class="${mode === 'swipe' ? 'on' : ''}" data-act="mode" data-id="swipe" ${sel.length !== 2 ? 'disabled title="Select exactly 2 versions"' : ''}>Swipe</button>
     <button class="${mode === 'overlay' ? 'on' : ''}" data-act="mode" data-id="overlay" ${sel.length !== 2 ? 'disabled title="Select exactly 2 versions"' : ''}>Overlay</button></div></div>
-  <div class="chips">${chips}</div>${stage}${table}`;
+  <div class="chips">${chips}</div>${stage}${table}${sel.filter(v => v.review_id && findReview(v.review_id)).map(v => { const f = findReview(v.review_id); return `<div class="card pad" style="margin-top:14px"><b>${verLabel(v)} was made in response to</b> ${esc(whoStr(f.r))} (${esc(useTitle(f.u))}): <i>“${esc(f.r.text)}”</i><div class="meta" style="margin-top:6px">Response: ${esc(fullResponse(f.r) || 'none written yet')}</div></div>`; }).join('')}`;
 }
 
 /* ---- AN versions ---- */
@@ -729,13 +725,22 @@ function viewVersions() {
   <div class="card pad" style="margin-bottom:20px"><b>Working draft:</b> ${draftN} new plot version${draftN === 1 ? '' : 's'} and ${draftU} record${draftU === 1 ? '' : 's'} not yet in a published version. ${S.anv.length ? '' : 'Publishing creates AN v1 and unlocks reviewer comments.'}
     <button class="link" data-act="to-draft-dash">View working draft</button></div>
   ${S.anv.length ? `<div class="card" style="overflow:auto"><table class="vtable"><tr><th>Version</th><th>Published</th><th>Figures</th><th>Plot versions</th><th>Reviewer comments</th><th>Documents</th><th>AN PDF</th><th>Notes</th><th></th></tr>${rows}</table></div>`
-    : '<div class="card empty">No AN version has been published yet. While the AN is being written, work happens in the working draft.</div>'}`;
+    : '<div class="card empty">No AN version has been published yet. While the AN is being written, work happens in the working draft.</div>'}
+  ${revisionLog()}`;
+}
+function revisionLog() {
+  const rows = S.versions.filter(v => v.parentId || v.num > 1).sort((a, b) => b.created - a.created).slice(0, 60).map(v => {
+    const p = plot(v.plotId), f = v.review_id && findReview(v.review_id), why = /^Response to /.test(v.motivation || '') ? '' : v.motivation;
+    return `<tr><td><a href="${L('/plot/' + p.id)}" data-sel="${v.id}"><b>${esc(p.name)}</b></a><br><span class="meta">${verLabel(v)} · ${fmtDate(v.created)}</span></td><td class="pre">${esc(v.changes)}</td><td class="pre">${esc(why) || '<span class="meta">—</span>'}</td>
+      <td>${f ? `<span class="meta">${esc(whoStr(f.r))}: “${esc(f.r.text.slice(0, 90))}${f.r.text.length > 90 ? '…' : ''}”</span>` : '<span class="meta">—</span>'}</td><td>${ctxChip(v.anvId)}${v.reviewed ? ' <span class="badge resolved">✓ reviewed</span>' : ''}</td></tr>`;
+  }).join('');
+  return `<div class="sechead" style="margin-top:28px"><h2>Plot revision history</h2></div>${rows ? `<div class="card" style="overflow:auto"><table class="vtable"><tr><th>Plot</th><th>What changed</th><th>Why</th><th>Comment</th><th>In</th></tr>${rows}</table></div>` : '<div class="card empty">No plot has been revised yet. Revisions appear here when you answer a comment with a revised plot or save a new plot version.</div>'}`;
 }
 function publishModal(editV) {
   const prev = latestAnv(), next = (prev ? prev.number : 0) + 1, dn = S.versions.filter(v => !v.anvId).length, du = S.usages.filter(u => !u.anvId).length;
   openModal({title: `Publish AN v${next}`, submit: `Publish v${next}`, wide: true,
     sub: `This creates a new AN version record. The ${dn} plot version${dn === 1 ? '' : 's'} and ${du} record${du === 1 ? '' : 's'} in your working draft become part of it, and the change summary from “Prepare release” is saved with it. Earlier versions are not changed.`,
-    body: `<div class="cols">${field('Version number', `<input type="text" name="number" value="${REL.suggestedNumber()}" inputmode="numeric">`)}${field('Publication date', `<input type="date" name="published_on" value="${today()}">`)}</div>`
+    body: (editV ? '' : REL.warnHtml()) + `<div class="cols">${field('Version number', `<input type="text" name="number" value="${REL.suggestedNumber()}" inputmode="numeric">`)}${field('Publication date', `<input type="date" name="published_on" value="${today()}">`)}</div>`
       + field('Notes', '<textarea name="notes" placeholder="e.g. Addressed ARC comments; new systematics table."></textarea>', '', true) + pdfField()
       + (prev ? `<label style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" name="carry" checked style="margin-top:4px"><span>Carry over Analysis Note figures from AN v${prev.number} that I haven't re-assigned <span class="meta">(each uses its plot's latest version; reviewer comments are not copied)</span></span></label>` : ''),
     onSubmit: async fd => {
@@ -820,7 +825,8 @@ function render() {
   else {
     const s = r.slice(2);
     if (!s[0]) h = viewDash();
-    else if (s[0] === 'cat') h = viewCat(s[1]);
+    else if (s[0] === 'cat') h = GAL.view(s[1]);
+    else if (s[0] === 'gallery') h = GAL.view(null);
     else if (s[0] === 'plot') h = s[2] === 'compare' ? viewCompare(s[1]) : viewPlot(s[1]);
     else if (s[0] === 'meetings') h = viewMeetings();
     else if (s[0] === 'reviewer') h = viewReviewer();
@@ -832,6 +838,7 @@ function render() {
     else if (s[0] === 'release') h = REL.view();
     else h = notFound();
   }
+  if (r[0] === 'a' && S && ['meetings', 'reviewer', 'pending'].includes(r[2])) h = commentTabs(r[2]) + h;
   $('#main').innerHTML = h;
   hydrateImages();
   if (r[0] === 'a' && S && r[2] === 'pdf') PDF.mountPdf();
@@ -868,8 +875,9 @@ function editPlotModal(p) {
   openModal({title: 'Plot details', submit: 'Save',
     body: field('Plot name', `<input type="text" name="name" required maxlength="150" value="${esc(p.name)}">`)
       + field('Category', `<select name="cat">${catOptions(p.catId)}</select>`, 'Moving a plot changes where it appears in the sidebar and in the downloaded folder structure.')
+      + field('Era', `<input type="text" name="era" list="eras" maxlength="40" value="${esc(p.era || '')}" placeholder="${esc(GAL.plotEra(p) || 'e.g. 2017')}"><datalist id="eras">${GAL.ERAS.map(e => `<option value="${e}">`).join('')}</datalist>`, 'Normally read from the end of the plot name. Set it here only if the name does not end with the era; it decides the slot in the gallery.', true)
       + field('Location in the AN', `<input type="text" name="location" maxlength="200" value="${esc(p.location)}" placeholder="e.g. p. 12 · Sec 3.2 · Fig 5">`, 'The page, section, subsection or figure number where this plot appears.', true),
-    onSubmit: async fd => { await api('PATCH', aurl('/plots/' + p.id), {name: fd.get('name').trim(), category_id: fd.get('cat'), location: fd.get('location').trim()}); await reload(); toast('Saved'); }});
+    onSubmit: async fd => { await api('PATCH', aurl('/plots/' + p.id), {name: fd.get('name').trim(), category_id: fd.get('cat'), location: fd.get('location').trim(), era: fd.get('era').trim()}); await reload(); toast('Saved'); }});
 }
 /* ---- upload many plots at once: electron_pt_2016postVFP.png -> plot "electron_pt_2016postVFP", panel "2016postVFP" of group "electron_pt" ---- */
 const ERA_TAIL = /[_\-. ]?((?:UL)?20\d\d(?:[_\-]?(?:pre|post)(?:VFP|EE|BPix)?|EE|BPix)?|UL1[678](?:[_\-]?(?:pre|post))?)$/i;
@@ -903,6 +911,12 @@ function bulkModal(catId) {
           st.innerHTML = !nm ? '<span class="badge pending">Needs a name</span>' : dup ? '<span class="badge pending">Name used twice — rename one</span>' : ex ? '<span class="badge s-updated">Already exists</span>' : '<span class="badge s-new">New plot</span>';
           sel.hidden = !(ex && !dup); if (!sel.hidden && !sel.dataset.set) { sel.value = published() ? 'skip' : 'version'; sel.dataset.set = 1; }
         });
+        box.querySelectorAll('.ecov').forEach(sp => {                     // which standard eras this group has (advisory only)
+          const base = sp.dataset.cov, have = new Set();
+          rows.filter(r => r.dataset.base === base).forEach(r => { const e = GAL.eraSlot(r.querySelector('[name^=era]').value); if (e) have.add(e); });
+          S.plots.forEach(p => { if (GAL.plotBase(p) === base) { const e = GAL.eraSlot(GAL.plotEra(p)); if (e) have.add(e); } });
+          sp.innerHTML = have.size ? GAL.ERAS.map(e => `<span class="badge ${have.has(e) ? 'resolved' : 'pending'}">${e} ${have.has(e) ? '✓' : 'missing'}</span>`).join(' ') : '<span class="badge">no era found</span>';
+        });
       };
       const draw = () => {
         $('.dpreview', f).style.display = 'none'; const n = entries.length;
@@ -911,7 +925,7 @@ function bulkModal(catId) {
         const groups = new Map(); [...entries].sort((a, b) => a.file.name.localeCompare(b.file.name, undefined, {numeric: true})).forEach(e => { const b = baseOf(e); if (!groups.has(b)) groups.set(b, []); groups.get(b).push(e); });
         let rows = '';
         for (const [base, items] of groups) {
-          rows += `<tr class="grp"><td colspan="5">${esc(base)} · ${items.length} file${items.length === 1 ? '' : 's'} <button type="button" class="link" data-rmg="${esc(base)}" title="Leave this whole group out">✕ exclude all ${items.length}</button></td><td>${an ? `<input type="text" data-base="${esc(base)}" maxlength="40" placeholder="Figure no." value="${esc(figs[base] || '')}">` : ''}</td><td></td></tr>`;
+          rows += `<tr class="grp"><td colspan="5">${esc(base)} · ${items.length} file${items.length === 1 ? '' : 's'} <button type="button" class="link" data-rmg="${esc(base)}" title="Leave this whole group out">✕ exclude all ${items.length}</button> <span class="ecov" data-cov="${esc(base)}"></span></td><td>${an ? figPick('fg' + base.replace(/\W/g, '_'), figs[base] || '', `data-base="${esc(base)}"`, true, Object.values(figs)) : ''}</td><td></td></tr>`;
           rows += items.map(e => `<tr data-id="${e.id}" data-base="${esc(base)}"><td class="mono">${esc(e.file.name)}</td><td><input type="text" name="nm${e.id}" maxlength="150" value="${esc(e.name)}"></td><td><input type="text" name="era${e.id}" maxlength="60" value="${esc(e.era)}" placeholder="era"></td>
             <td><select name="ct${e.id}">${catOptions(e.cid)}</select></td><td><input type="text" name="loc${e.id}" maxlength="200" value="${esc(e.loc)}" placeholder="p. 12 · Sec 3.2"></td><td><span class="st"></span><select name="act${e.id}" ${e.actSet ? 'data-set="1"' : ''} hidden><option value="version" ${e.act === 'version' ? 'selected' : ''}>Add as new version</option><option value="skip" ${e.act === 'skip' ? 'selected' : ''}>Skip it</option></select></td>
             <td><button type="button" class="iconbtn" data-rm="${e.id}" title="Leave this plot out">✕</button></td></tr>`).join('');
@@ -922,7 +936,8 @@ function bulkModal(catId) {
         refresh();
       };
       const absorb = files => {                          // add to the list (never replace it)
-        sync(); const have = new Set(entries.map(e => e.file.name + '|' + e.file.size + '|' + e.file.lastModified));
+        const bad = [...files].filter(x => !/\.(png|jpe?g|svg|webp|gif)$/i.test(x.name)); if (bad.length) toast(`${bad.length} file${bad.length === 1 ? ' was' : 's were'} skipped (not an image format the tracker supports): ${bad.slice(0, 3).map(x => x.name).join(', ')}${bad.length > 3 ? '…' : ''}`, 'err', 7000);
+        files = [...files].filter(x => !bad.includes(x)); sync(); const have = new Set(entries.map(e => e.file.name + '|' + e.file.size + '|' + e.file.lastModified));
         [...files].forEach(file => { const k = file.name + '|' + file.size + '|' + file.lastModified; if (have.has(k)) return; have.add(k);
           const stem = file.name.replace(/\.[^.]+$/, ''), sp = splitEra(stem); entries.push({id: ++nid, file, stem, name: stem, era: sp.era, cid: f.cat.value, loc: '', act: published() ? 'skip' : 'version', actSet: false}); });
         draw();
@@ -931,7 +946,7 @@ function bulkModal(catId) {
       $('.drop', f).addEventListener('drop', () => setTimeout(() => { const fs = [...inp.files]; inp.value = ''; absorb(fs); }));
       f.cat.addEventListener('change', () => { box.querySelectorAll('select[name^=ct]').forEach(s => { s.value = f.cat.value; }); refresh(); });
       if (f.tgt) f.tgt.addEventListener('change', () => { box.querySelectorAll('select[name^=act]').forEach(s => { s.value = published() ? 'skip' : 'version'; }); });
-      box.addEventListener('input', e => { if (e.target.matches('[name^=nm]')) refresh(); }); box.addEventListener('change', e => { if (e.target.matches('[name^=ct]')) refresh(); });
+      box.addEventListener('input', e => { if (e.target.matches('[name^=nm],[name^=era]')) refresh(); }); box.addEventListener('change', e => { if (e.target.matches('[name^=ct]')) refresh(); });
       box.addEventListener('click', e => {
         const t = e.target.closest('button'); if (!t) return;
         if (t.id === 'bmore') { inp.click(); return; }
@@ -959,7 +974,7 @@ function bulkModal(catId) {
           for (const it of items) {
             const v = {file_id: it.up.file_id, summary: it.name.slice(0, 140), motivation: '', dataset: '', code: '', file_name: it.stem}; let pid, vid, fresh = false;
             if (it.ex) { const r = await api('POST', aurl(`/plots/${it.ex.id}/versions`), {...v, changes}); pid = it.ex.id; vid = r.id; nUpd++; }
-            else { const r = await api('POST', aurl('/plots'), {category_id: it.cid, name: it.name, location: it.loc, an_version_id: tgt || undefined, version: {...v, changes: tgt ? 'Plot of the published version.' : 'Initial version.'}}); pid = r.id; vid = r.version_id; nNew++; fresh = true; }
+            else { const r = await api('POST', aurl('/plots'), {category_id: it.cid, name: it.name, location: it.loc, era: it.era, an_version_id: tgt || undefined, version: {...v, changes: tgt ? 'Plot of the published version.' : 'Initial version.'}}); pid = r.id; vid = r.version_id; nNew++; fresh = true; }
             if (it.fig && (!tgt || fresh) && !S.usages.some(u => u.type === 'note' && (u.anvId || null) === (tgt || null) && u.fig === it.fig && ver(u.versionId) && ver(u.versionId).plotId === pid)) { await api('POST', aurl('/usages'), {plot_version_id: vid, type: 'note', an_version_id: tgt, fig: it.fig, panel: it.era, an_ver: ''}); nFig++; }
           }
         });
@@ -1007,9 +1022,7 @@ function meetingFields(u = {}) {
 }
 function useFields(type, u = {}) {
   if (type === 'note') {
-    const figs = [...new Set(S.usages.filter(x => x.type === 'note').map(x => x.fig))];
-    return `<datalist id="figs">${figs.map(f => `<option value="${esc(f)}">`).join('')}</datalist>`
-      + field('Figure number in the Analysis Note', `<input type="text" name="fig" list="figs" required maxlength="40" value="${esc(u.fig || '')}" placeholder="e.g. 4.2">`, 'Type a number or pick one used before.')
+    return field('Figure in the Analysis Note', figPick('fig', u.fig || '', '', false), 'Pick a figure that already exists, or “New figure number…”.')
       + field('Panel label', `<input type="text" name="panel" maxlength="60" value="${esc(u.panel || '')}" placeholder="e.g. UL2018">`, 'Only if this figure is made of several plots (for example one per era). Give each plot the same figure number and its own label.', true)
       + field('Analysis Note draft / version', `<input type="text" name="an_ver" maxlength="40" value="${esc(u.anVer || '')}" placeholder="e.g. v3">`, '', true);
   }
@@ -1020,6 +1033,7 @@ function useModal(vid, type, u) {
   openModal({title: `${u ? 'Edit' : 'Add'} · ${note ? 'Analysis Note figure' : 'plot shown in a meeting'}`, wide: !note,
     sub: `${esc(p.name)} ${verLabel(v)}${note ? ` · recorded in ${u ? (u.anvId ? anvLabel(anv(u.anvId)) : 'the working draft') : (cx.draft ? 'the working draft' : cx.label)}` : ''}`, body: useFields(t, u || {}),
     onSubmit: async fd => {
+      if (note && !fd.get('fig').trim()) throw new Error('Choose the figure, or type a new figure number.');
       const d = note ? {fig: fd.get('fig').trim(), panel: fd.get('panel').trim(), an_ver: fd.get('an_ver').trim()} : {title: fd.get('title').trim(), link: fd.get('link').trim(), slide: fd.get('slide').trim(), date: fd.get('date')};
       await (u ? api('PATCH', aurl('/usages/' + u.id), d) : api('POST', aurl('/usages'), {plot_version_id: vid, type: t, an_version_id: note ? cx.id : null, ...d})); await reload();
     }});
@@ -1127,7 +1141,7 @@ function figureBuilderModal() {
   const row = i => `<div class="cols fbrow"><div class="f"><select name="p${i}" data-i="${i}">${opts}</select></div><div class="f"><input type="text" name="l${i}" maxlength="60" placeholder="Panel label, e.g. UL2018"></div></div>`;
   openModal({title: 'Add a figure made of several plots', wide: true, submit: 'Add figure',
     sub: 'For example Figure 3 with one plot per era. Pick each plot and label its panel. Comments can then point at one era, and the fix goes straight to that plot.',
-    body: field('Figure number in the Analysis Note', '<input type="text" name="fig" required maxlength="40" placeholder="e.g. 3">') + `<div class="l" style="font-weight:600;font-size:13px">Plots in this figure <span class="meta">(leave unused rows as “none”)</span></div><div id="fbrows">${[0, 1, 2, 3].map(row).join('')}</div><button type="button" class="btn sm" id="fbadd">+ Another plot</button>`,
+    body: field('Figure in the Analysis Note', figPick('fig', '', '', false)) + `<div class="l" style="font-weight:600;font-size:13px">Plots in this figure <span class="meta">(leave unused rows as “none”)</span></div><div id="fbrows">${[0, 1, 2, 3].map(row).join('')}</div><button type="button" class="btn sm" id="fbadd">+ Another plot</button>`,
     setup: f => {
       let n = 4;
       f.addEventListener('change', e => { const s = e.target; if (s.matches('select[data-i]')) { const l = f['l' + s.dataset.i]; const p = plot(s.value); if (p && !l.value) l.value = eraLabelOf(p.name); } });
@@ -1137,7 +1151,7 @@ function figureBuilderModal() {
       const rows = []; for (let i = 0; fd.has('p' + i); i++) if (fd.get('p' + i)) rows.push({pid: fd.get('p' + i), label: fd.get('l' + i).trim()});
       if (!rows.length) throw new Error('Choose at least one plot.');
       if (rows.length > 1 && rows.some(r => !r.label)) throw new Error('Give every plot a panel label (for example its era).');
-      const fig = fd.get('fig').trim();
+      const fig = fd.get('fig').trim(); if (!fig) throw new Error('Choose the figure, or type a new figure number.');
       await batch(async () => { for (const r of rows) await api('POST', aurl('/usages'), {plot_version_id: latest(r.pid).id, type: 'note', an_version_id: cx.id, fig, panel: r.label, an_ver: ''}); });
       await reload(); toast(`Figure ${fig} added with ${rows.length} plot${rows.length === 1 ? '' : 's'}.`);
     }});
@@ -1282,7 +1296,14 @@ const A = {
   'edit-plot': el => editPlotModal(plot(el.dataset.id)),
   'new-plot': el => newPlotModal(el.dataset.id),
   'bulk-plots': el => bulkModal(el.dataset.id),
-  'del-cat': el => { const c = cat(el.dataset.id), back = c.parentId ? L('/cat/' + c.parentId) : L(''); confirmBox('Delete category', `Delete the empty category “${esc(c.name)}”?`, 'Delete', async () => { await api('DELETE', aurl('/categories/' + el.dataset.id)); await loadAnalysis(S.an.id); go(back); render(); }); },
+  'del-cat': el => {
+    const c = cat(el.dataset.id), back = c.parentId ? L('/cat/' + c.parentId) : L(''), np = S.plots.filter(p => p.catId === c.id).length, nk = catKids(c.id).length, done = async () => { await loadAnalysis(S.an.id); go(back); render(); };
+    if (!np && !nk) return confirmBox('Delete category', `Delete the empty category “${esc(c.name)}”?`, 'Delete', async () => { await api('DELETE', aurl('/categories/' + c.id)); await done(); });
+    openModal({title: `Delete “${esc(c.name)}”`, submit: 'Delete category', sub: `It still holds ${np ? np + ' plot' + (np === 1 ? '' : 's') : ''}${np && nk ? ' and ' : ''}${nk ? nk + ' subcategor' + (nk === 1 ? 'y' : 'ies') : ''}. Nothing is lost: they are moved, and plots that belong to published AN versions are never deleted.`,
+      body: field('Move them to', `<select name="to">${np ? '' : '<option value="__top">(top level)</option>'}${catOptions(c.parentId, c.id)}</select>`, 'Plots and subcategories keep their versions and comments; only their folder changes.'),
+      onSubmit: async fd => { await api('DELETE', aurl('/categories/' + c.id), {move_to: fd.get('to')}); await done(); toast('Category deleted'); }});
+  },
+  'rev-ok': async el => { await api('POST', aurl(`/plot-versions/${el.dataset.id}/reviewed`), {reviewed: el.dataset.on === '1'}); await reload(); },
   'new-ver': el => newVersionModal(el.dataset.id),
   selver: el => {
     const v = ver(el.dataset.id); if (!v) return;
@@ -1339,6 +1360,7 @@ const A = {
   resolve: el => { const f = findReview(el.dataset.id); resolveModal(f.u, f.r); },
   'set-status': async el => { await api('POST', aurl(`/${el.dataset.kind === 'anc' ? 'an-comments' : 'reviews'}/${el.dataset.id}/status`), {status: el.dataset.status}); await reload(); },
   rel: el => REL.act(el),
+  gal: el => GAL.act(el),
   'show-summary': el => REL.showVersionSummary(el.dataset.id),
   'more-plot': el => { const f = findReview(el.dataset.id); resolveModal(f.u, f.r, true); },
   'add-figure': () => figureBuilderModal(),

@@ -169,6 +169,7 @@
     out.push({name: `${plan.root}/Review_Comments/Comments_and_Responses.md`, data: enc.encode(commentsMd())});
     out.push({name: `${plan.root}/Review_Comments/Change_Summary.md`, data: enc.encode(effectiveSummary())});
     out.push({name: `${plan.root}/Plot_Inventory.csv`, data: enc.encode(csv([['Plot', 'Category path', 'Location in the AN', 'File in this package', 'Version used', 'Status vs previous release', 'Original file name', 'Latest recorded change'], ...plan.rows]))});
+    out.push({name: `${plan.root}/manifest.json`, data: enc.encode(JSON.stringify(manifest(plan), null, 2))});
     return {blob: zipBlob(out), plan, count: out.length};
   }
   async function download() {
@@ -180,13 +181,51 @@
     } catch (e) { toast('Could not build the package: ' + e.message, 'err', 9000); } finally { done(); }
   }
 
+  /* ---------------- readiness: what still needs the analyst's attention (reminders, never an approval) ---------------- */
+  function readiness() {
+    const inv = inventory(), cs = counts(inv), items = [];
+    const comments = [...S.usages.flatMap(u => u.reviews.filter(r => !r.none)), ...S.anc];
+    const open = comments.filter(c => c.status === 'pending').length, prog = comments.filter(c => c.status === 'in_progress').length, done = comments.filter(c => c.status === 'resolved').length;
+    const unanswered = comments.filter(c => isOpen(c) && !(c.answer || '').trim()).length;
+    const needRev = inv.filter(x => x.status === 'updated' && !x.latest.reviewed), noWhy = inv.flatMap(x => x.newer).filter(v => v.review_id && (!(v.motivation || '').trim() || /^Response to /.test(v.motivation)));
+    const inc = GAL.buildGroups(S.plots.filter(p => verOf(p.id).length || true)).filter(GAL.incomplete);
+    items.push({level: open + prog ? 'warn' : 'ok', text: `Comments: <b>${open}</b> open · <b>${prog}</b> in progress · <b>${done}</b> resolved`, href: L('/pending'), go: 'Open comments'});
+    if (unanswered) items.push({level: 'warn', text: `<b>${unanswered}</b> unresolved comment${unanswered === 1 ? ' has' : 's have'} no response yet`, href: L('/pending'), go: 'Write responses'});
+    items.push({level: 'info', text: `Plots: <b>${cs.updated}</b> updated · <b>${cs.added}</b> new · ${cs.unchanged} unchanged`, op: 'gal-filter', fid: 'updated', go: 'Show updated plots'});
+    items.push({level: needRev.length ? 'warn' : 'ok', text: needRev.length ? `<b>${needRev.length}</b> revised plot${needRev.length === 1 ? '' : 's'} not yet checked by you` : 'Every revised plot has been checked by you', op: 'gal-filter', fid: 'review', go: needRev.length ? 'Review them' : ''});
+    items.push({level: noWhy.length ? 'warn' : 'ok', text: noWhy.length ? `<b>${noWhy.length}</b> revision${noWhy.length === 1 ? ' has' : 's have'} no explanation of why it changed` : 'Every revision made for a comment says why it changed', href: noWhy.length ? L('/plot/' + noWhy[0].plotId) : '', go: noWhy.length ? 'Open the first' : ''});
+    items.push({level: inc.length ? 'info' : 'ok', text: inc.length ? `<b>${inc.length}</b> plot group${inc.length === 1 ? ' does' : 's do'} not have all four eras (only a reminder)` : 'No plot group is missing an era', op: 'gal-filter', fid: 'inc', go: inc.length ? 'Show them' : ''});
+    const sr = !!(S.work && S.work.summary_reviewed);
+    items.push({level: sr ? 'ok' : 'warn', text: sr ? 'You marked the change summary as reviewed' : 'The change summary is generated automatically; read it and tick the box below it', href: '#sumbox', go: ''});
+    return {items, warn: items.filter(i => i.level === 'warn')};
+  }
+  const readyHtml = r => `<div class="card pad ready"><h3 style="margin:0 0 8px">Before you release</h3>${r.items.map(i => `<div class="rrow ${i.level}"><span class="ic">${i.level === 'ok' ? '✓' : i.level === 'warn' ? '!' : 'i'}</span><span>${i.text}</span>${i.go ? (i.op ? `<button class="link" data-act="rel" data-op="${i.op}" data-id="${i.fid}">${i.go}</button>` : `<a class="link" href="${i.href}">${i.go}</a>`) : ''}</div>`).join('')}
+    <div class="meta" style="margin-top:8px">These are reminders to help you. Passing them does not mean the Analysis Note is scientifically approved: that judgement stays with you.</div></div>`;
+  const warnHtml = () => { const w = readiness().warn; return w.length ? `<div class="banner draft" style="display:block"><b>Still open:</b><ul style="margin:6px 0 0 18px">${w.map(i => `<li>${i.text}</li>`).join('')}</ul><div class="meta">You can still publish. These are only reminders.</div></div>` : ''; };
+
+  /* a machine-readable description of the package (documented in the README) */
+  function manifest(plan) {
+    const comments = [], plotIds = u => { const v = ver(u.versionId); return v ? [v.plotId] : []; };
+    S.usages.forEach(u => u.reviews.filter(r => !r.none).forEach(r => comments.push({id: r.id, type: 'plot', source: whoStr(r), text: r.text, status: r.status, response: (r.answer || '').trim(), response_with_revision_reasons: fullRsp(r), action_taken: r.resolution || '', plot_ids: [...new Set([...plotIds(u), ...[r.resolvedVersionId, ...(r.resolvedMore || [])].filter(Boolean).map(id => ver(id) && ver(id).plotId).filter(Boolean)])], figure: u.type === 'note' ? u.fig : null, panel: u.panel || null, an_version: u.anvId ? anv(u.anvId).number : null, meeting: u.type === 'note' ? null : meetingName(u)})));
+    S.anc.forEach(c => comments.push({id: c.id, type: c.kind, source: whoStr(c), text: c.text, status: c.status, response: (c.answer || '').trim(), response_with_revision_reasons: (c.answer || '').trim(), action_taken: c.resolution || '', plot_ids: [], location: c.location || '', an_version: c.anvId ? anv(c.anvId).number : null, meeting: c.source === 'meeting' ? c.meeting : null}));
+    const last = lastRelease(), by = id => comments.filter(c => c.plot_ids.includes(id)).map(c => c.id);
+    return {format: 'analysis-tracker-manifest', format_version: 1, generated: new Date().toISOString(), analysis: {id: S.an.id, title: S.an.title, an_name: S.an.an_name || '', collaboration: S.an.collaboration || ''},
+      working_version: workingName(), previous_release: last ? {number: last.number, published_on: last.published_on} : null, change_summary_reviewed: !!(S.work && S.work.summary_reviewed),
+      plots: plan.files.map(f => { const x = f.x, v = x.latest; return {plot_id: x.p.id, name: x.p.name, group: GAL.plotBase(x.p), era: GAL.plotEra(x.p) || null, file: f.path.slice(plan.root.length + 1), original_file_name: v.fileName,
+        category_id: x.p.catId, category_path: catChain(x.p.catId).map(c => c.name), category_ids: catChain(x.p.catId).map(c => c.id), location_in_an: x.p.location || null, status_vs_previous_release: x.status,
+        released_version_id: x.rel ? x.rel.id : null, released_label: x.rel ? verLabel(x.rel) : null,
+        current_revision: {version_id: v.id, label: verLabel(v), previous_revision_id: v.parentId || null, created: v.created, author: v.author, what_changed: v.changes, why_changed: v.motivation || '', reviewed_by_analyst: !!v.reviewed},
+        comment_ids: by(x.p.id)}; }),
+      comments};
+  }
+
   /* ---------------- the page ---------------- */
   const treePreview = plan => {
     const dirs = new Map(); plan.files.forEach(f => { const parts = f.path.split('/'), file = parts.pop(), dir = parts.join('/'); if (!dirs.has(dir)) dirs.set(dir, []); dirs.get(dir).push(file); });
     const lines = [plan.root + '/']; const keys = [...dirs.keys()].filter(k => k !== plan.root).sort();
     (dirs.get(plan.root) || []).forEach(f => lines.push('  ' + f));
     keys.forEach(k => { const depth = k.split('/').length - 1; lines.push('  '.repeat(depth) + k.split('/').pop() + '/'); dirs.get(k).forEach(f => lines.push('  '.repeat(depth + 1) + f)); });
-    lines.push('  Review_Comments/', '    Comments_and_Responses.md', '    Change_Summary.md', '  Plot_Inventory.csv'); return lines.join('\n');
+    lines.push('  Review_Comments/', '    Comments_and_Responses.md', '    Change_Summary.md', '  Plot_Inventory.csv', '  manifest.json'); return lines.join('\n');
   };
   const chip = s => `<span class="badge s-${s}">${s === 'new' ? 'New' : s === 'updated' ? 'Updated' : 'Unchanged'}</span>`;
   function view() {
@@ -201,9 +240,10 @@
         <td>${x.open ? `<span class="badge pending">${x.open} open</span>` : ''}${x.done ? `<span class="badge resolved">${x.done} resolved</span>` : ''}</td></tr>`;
     }).join('');
     const secHtml = sm.sections.map((s, i) => `<div class="sumsec"><h3>${i + 1}. ${esc(s.title)} <span class="count">${s.items.length}</span></h3>${s.items.length ? `<ul>${s.items.map(it => `<li><span class="badge ${it.auto ? '' : 'stage'}">${it.auto ? 'auto' : 'analyst'}</span> ${esc(it.text)}${it.id ? ` <button class="iconbtn" data-act="rel" data-op="del-entry" data-id="${it.id}" title="Remove">🗑</button>` : ''}</li>`).join('')}</ul>` : '<div class="meta">None.</div>'}</div>`).join('');
-    return `${banner()}<div class="crumbs"><a href="${L('')}">Dashboard</a> / Prepare release</div>
-      <div class="pagehead"><div><h1>Prepare release · ${esc(name)}</h1><p>The working version always holds each plot at its newest version, compared with ${last ? anvLabel(last) : 'no earlier release'}. Released AN versions are never changed, and older plot versions stay in each plot's history.</p></div>
+    return `${banner()}<div class="crumbs"><a href="${L('')}">Overview</a> / Release &amp; Export</div>
+      <div class="pagehead"><div><h1>Release &amp; Export · ${esc(name)}</h1><p>The working version always holds each plot at its newest version, compared with ${last ? anvLabel(last) : 'no earlier release'}. Released AN versions are never changed, and older plot versions stay in each plot's history.</p></div>
       <div class="actions"><button class="btn" data-act="rel" data-op="rename">Rename</button><button class="btn" data-act="rel" data-op="download">Download ZIP</button><button class="btn primary" data-act="publish">Publish ${esc('AN v' + suggestedNumber())}</button></div></div>
+      ${readyHtml(readiness())}
       <div class="tiles"><div class="card tile"><b>${cs.total}</b><span>Plots in this version</span></div><div class="card tile ${cs.updated ? 'warn' : ''}"><b>${cs.updated}</b><span>Updated</span></div><div class="card tile"><b>${cs.added}</b><span>New</span></div><div class="card tile"><b>${cs.unchanged}</b><span>Unchanged</span></div><div class="card tile ${open ? 'warn' : ''}"><b>${open}</b><span>Comments still open</span></div></div>
       <div class="sechead"><h2>Plots in ${esc(name)}</h2><div class="chips">${[['all', 'All'], ['updated', 'Updated'], ['new', 'New'], ['unchanged', 'Unchanged']].map(([k, l]) => `<span class="chip ${f === k ? 'on' : ''}" data-act="rel" data-op="filter" data-id="${k}">${l}</span>`).join('')}</div></div>
       ${rows.length ? `<div class="card" style="overflow:auto"><table class="vtable"><tr><th>Plot</th><th>Location in the AN</th><th>${last ? anvLabel(last) : 'Released'}</th><th>In ${esc(name)}</th><th>Status</th><th>Comments</th></tr>${table}</table></div>` : '<div class="card empty">No plots here yet.</div>'}
@@ -211,6 +251,7 @@
       ${edited ? '<div class="banner draft"><span><b>Edited by hand.</b> The text below is what will be saved and downloaded. New changes are not added to it automatically; use <b>Reset to generated</b> to refresh it.</span></div>' : ''}
       <div class="meta" style="margin-bottom:10px"><span class="badge">auto</span> detected from what you recorded in the tracker &nbsp; <span class="badge stage">analyst</span> written by you (use <b>+ Record a change</b> to explain methodology changes and other decisions).</div>
       <div class="card pad">${edited ? `<pre class="mdpre">${esc(S.work.summary_md)}</pre>` : secHtml}</div>
+      <label id="sumbox" class="chk" style="margin:10px 2px"><input type="checkbox" data-act="rel" data-op="sumrev" ${S.work && S.work.summary_reviewed ? 'checked' : ''}> I have read and reviewed this change summary</label>
       <div class="sechead"><h2>Download</h2></div>
       <div class="card pad"><p style="margin-top:0">One ZIP with <b>all ${cs.total} plots</b> (changed or not) in the category and subcategory folders, plus the review history and this summary. Extracting it recreates the folders on your computer.</p><pre class="mdpre">${esc(treePreview(plan))}</pre>
         <button class="btn primary" data-act="rel" data-op="download">Download ${esc(plan.root)}.zip</button> <span class="meta">Comments still open: ${open}${open ? ' (they are listed under “Still Open”)' : ''}</span></div>`;
@@ -251,11 +292,13 @@
     if (op === 'reset-summary') { await api('POST', aurl('/working'), {summary_md: null}); return reload(); }
     if (op === 'del-entry') { await api('DELETE', aurl('/working/entries/' + el.dataset.id)); return reload(); }
     if (op === 'filter') { ui.relf = el.dataset.id; return render(); }
+    if (op === 'sumrev') { await api('POST', aurl('/working'), {summary_reviewed: el.checked}); return reload(); }
+    if (op === 'gal-filter') { const k = el.dataset.id; ui.gf = {q: '', era: '', review: '', rev: k === 'updated' || k === 'review' ? k : '', fig: '', inc: k === 'inc'}; return go(L('/gallery')); }
   }
   /* small card for the dashboard */
   function dashCard() {
-    const cs = counts(inventory());
-    return `<div class="card pad guide"><div><b>Working version ${esc(workingName())}</b><div class="meta">${cs.total} plot${cs.total === 1 ? '' : 's'}: ${cs.updated} updated · ${cs.added} new · ${cs.unchanged} unchanged. The newest version of every plot is included automatically.</div></div><div class="actions"><a class="btn primary" href="${L('/release')}">Prepare release</a></div></div>`;
+    const cs = counts(inventory()), r = readiness();
+    return `<div class="card pad guide"><div><b>Release · ${esc(workingName())}</b><div class="meta">${cs.total} plot${cs.total === 1 ? '' : 's'}: ${cs.updated} updated · ${cs.added} new · ${cs.unchanged} unchanged.${r.warn.length ? ` <b>${r.warn.length} thing${r.warn.length === 1 ? '' : 's'} still need${r.warn.length === 1 ? 's' : ''} your attention.</b>` : ' Nothing is waiting for you.'}</div></div><div class="actions"><a class="btn primary" href="${L('/release')}">Release &amp; Export</a></div></div>`;
   }
-  window.REL = {view, act, dashCard, effectiveSummary, suggestedNumber, workingName, showVersionSummary, commentsMd, summary, inventory, build, zipBlob};
+  window.REL = {view, act, dashCard, readiness, warnHtml, manifest, effectiveSummary, suggestedNumber, workingName, showVersionSummary, commentsMd, summary, inventory, build, zipBlob};
 })();
