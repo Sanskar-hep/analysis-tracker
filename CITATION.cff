@@ -6,7 +6,7 @@ abstract: "A web tool for tracking an analysis: plots and their versions, commen
 authors:
   - family-names: "Nanda"
     given-names: "Sanskar"
-version: "1.1.0"
+version: "1.2.0"
 date-released: "2026-10-15"
 doi: 10.5281/zenodo.23377664
 license: MIT
