@@ -15,6 +15,9 @@
   const suggestedNumber = () => { const m = /(\d+)\s*$/.exec(workingName()); return m ? parseInt(m[1], 10) : nextNum(); };
   const one = (s, n = 140) => { const t = String(s || '').replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n - 1) + '…' : t; };
   const safe = s => String(s || '').replace(/[\\/:*?"<>|\u0000-\u001f]+/g, '_').replace(/\s+/g, '_').replace(/_+/g, '_').replace(/^[_.]+|[_.]+$/g, '') || 'untitled';
+  /* the response as the analyst wrote it; the reasons given for revised plots are linked in from the plot versions (never typed twice) */
+  const fullRsp = c => { const own = (c.answer || '').trim(), n = c.resolvedVersionId !== undefined ? [c.resolvedVersionId, ...(c.resolvedMore || [])].map(id => id && ver(id)).filter(v => v && v.motivation && !/^Response to /.test(v.motivation)).map(v => `Revised plot ${plot(v.plotId).name} (${verLabel(v)}): ${v.motivation}`) : []; return [own, ...n].filter(Boolean).join(' ').trim(); };
+  const nodot = s => String(s || '').replace(/[.\s]+$/, '');
   const stLabel = {pending: 'Open', in_progress: 'In progress', resolved: 'Resolved'};
 
   /* ---------------- what is in the working version, compared with the last release ---------------- */
@@ -40,9 +43,10 @@
     const S_ = {plots: [], newp: [], addressed: [], method: [], other: [], unchanged: [], open: []};
     inv.filter(x => x.status === 'updated').forEach(x => {
       const parts = x.newer.map(v => {
-        let t = `${verLabel(v)}: ${one(v.changes, 160)}`;
+        let t = `${verLabel(v)} — what changed: ${nodot(one(v.changes, 200))}`;
+        if (v.motivation && !/^Response to /.test(v.motivation)) t += `. Why it changed: ${nodot(one(v.motivation, 200))}`;
         const f = v.review_id && findReview(v.review_id);
-        if (f) t += ` (in response to ${whoStr(f.r)}: “${one(f.r.text, 80)}”)`;
+        if (f) t += `. Associated comment: ${whoStr(f.r)} “${one(f.r.text, 90)}”${(f.r.answer || '').trim() ? ' — response: ' + nodot(one(f.r.answer, 220)) : ''} — status: ${stLabel[f.r.status] || f.r.status}`;
         return t;
       });
       S_.plots.push({auto: true, text: `Updated ${x.path ? x.path + ' / ' : ''}${x.p.name}: ${verLabel(x.rel)} → ${verLabel(x.latest)}. ${parts.join(' · ')}`});
@@ -79,10 +83,11 @@
     const L = [`# Comments and Responses — ${workingName()}`, '', `${S.an.title}${S.an.an_name ? ' · ' + S.an.an_name : ''}${S.an.collaboration ? ' · ' + S.an.collaboration : ''}. Generated ${today()} from the tracker.`, ''];
     const q = t => String(t || '').split('\n').map(l => '  > ' + l).join('\n');
     const block = (title, c) => {
-      const lines = [`#### ${title}`, '', `- **Comment** — ${whoStr(c)}, ${fmtDate(c.created)}`, q(c.text), `- **Response:** ${(c.answer || '').trim() || '_no response written yet_'}`];
+      const lines = [`#### ${title}`, '', `- **Comment** — ${whoStr(c)}, ${fmtDate(c.created)}`, q(c.text), `- **Response:** ${fullRsp(c) || '_no response written yet_'}`];
       const act = (c.resolution || '').trim(); if (act) lines.push(`- **Action taken:** ${act}`);
       const vs = [c.resolvedVersionId, ...(c.resolvedMore || [])].map(id => id && ver(id)).filter(Boolean);
       if (vs.length) lines.push(`- **Updated plot${vs.length > 1 ? 's' : ''}:** ${vs.map(v => `${plot(v.plotId).name} ${verLabel(v)} (${v.fileName})`).join('; ')}`);
+      vs.forEach(v => { lines.push(`  - *${plot(v.plotId).name} ${verLabel(v)}* — what changed: ${one(v.changes, 600)}`); });
       if (c.anchor) lines.push(`- **Where in the AN PDF:** page ${c.anchor.page}`);
       lines.push(`- **Status:** ${stLabel[c.status] || c.status}`, '');
       return lines;

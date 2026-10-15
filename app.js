@@ -123,6 +123,9 @@ const imageUrl = v => fetchImage(S.an.id, v.file_id, v.ext);
 const whoStr = r => `${r.role}${r.name ? ' · ' + r.name : ''}`;
 const useTitle = u => u.type === 'note' ? `Analysis Note · Fig ${u.fig}` : `${meetingName(u)}${u.slide ? ' · slide ' + u.slide : ''}`;
 const findReview = id => { for (const u of S.usages) { const r = u.reviews.find(x => x.id === id); if (r) return {u, r}; } return null; };
+/* the revised plots made for a comment: what changed and why live on the plot versions (one source), and are shown with the response */
+const revNotes = r => [r.resolvedVersionId, ...(r.resolvedMore || [])].map(id => id && ver(id)).filter(Boolean).map(v => ({v, name: plot(v.plotId).name, what: v.changes, why: /^Response to /.test(v.motivation || '') ? '' : (v.motivation || '')}));
+const fullResponse = r => [(r.answer || '').trim(), ...revNotes(r).filter(n => n.why).map(n => `Revised plot ${n.name} (${verLabel(n.v)}): ${n.why}`)].filter(Boolean).join('\n');
 const L = p => `#/a/${S.an.id}${p}`;
 
 /* ---- one AN figure can be made of several plots ("panels", e.g. one per era) ---- */
@@ -617,7 +620,7 @@ function viewPlot(id) {
         <div class="bigimg" data-act="zoom" data-id="${sel.id}">${img(sel)}</div>
         <div style="padding:16px 18px 0;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
           <h2>${verLabel(sel)} ${sel.rev ? '<span class="badge">revision</span>' : ''} ${isPub() ? ctxChip(sel.anvId) : ''}</h2>
-          <div class="actions"><button class="btn sm" data-act="download" data-id="${sel.id}">Download</button>${sel.anvId ? '' : `<button class="btn sm danger" data-act="del-ver" data-id="${sel.id}">Delete version</button>`}</div></div>
+          <div class="actions"><button class="btn sm" data-act="download" data-id="${sel.id}">Download</button>${sel.id !== vs[vs.length - 1].id ? `<button class="btn sm" data-act="restore-ver" data-id="${sel.id}" title="Make this older version the newest one again (nothing is deleted)">Restore as new version</button>` : ''}${sel.anvId ? '' : `<button class="btn sm danger" data-act="del-ver" data-id="${sel.id}">Delete version</button>`}</div></div>
         ${respTo}
         <dl class="kv">
           <dt>What this version shows</dt><dd>${esc(sel.summary)}</dd>
@@ -641,16 +644,16 @@ const statusBtn = (kind, x) => `<button class="btn sm" data-act="set-status" dat
 function reviewRow(u, r, opts = {}) {
   const [cls, label] = stateOf(r.status, r.answer), figure = u.type === 'note';
   const act = r.none ? `<button class="btn sm" data-act="edit-rv" data-id="${r.id}">Add comment</button>`
-    : r.status !== 'resolved' ? `<button class="btn sm primary" data-act="resolve" data-id="${r.id}">Mark resolved</button>${statusBtn('rev', r)}<button class="btn sm" data-act="edit-rv" data-id="${r.id}">Edit</button>`
+    : r.status !== 'resolved' ? `<button class="btn sm primary" data-act="resolve" data-id="${r.id}">Respond / resolve</button>${statusBtn('rev', r)}<button class="btn sm" data-act="edit-rv" data-id="${r.id}">Edit</button>`
     : `<button class="btn sm" data-act="reopen" data-id="${r.id}">Reopen</button>`;
   const vers = [r.resolvedVersionId, ...(r.resolvedMore || [])].map(id => id && ver(id)).filter(Boolean);
   const target = opts.group ? `<span class="badge ${r.scope === 'figure' ? '' : 'stage'}">${r.scope === 'figure' ? 'Whole figure' : esc(panelName(u))}</span> ` : '';
-  const addMore = figure && opts.group && r.status === 'resolved' && !r.none ? `<br><button class="link" data-act="more-plot" data-id="${r.id}">＋ Updated plot for another panel</button>` : '';
+  const addMore = r.status === 'resolved' && !r.none ? `<br><button class="link" data-act="more-plot" data-id="${r.id}">＋ Add revised plot(s)</button>` : '';
   return `<div class="rv"><div><div class="who">${target}${esc(whoStr(r))} <span class="meta">· ${fmtDate(r.created)}</span></div>
     ${r.none ? '<div class="txt none">No comments so far</div>' : `<div class="txt">${esc(r.text)}</div>`}${r.none ? '' : anchorLine(r, 'rev')}</div>
     <div class="ra">${r.none ? '' : `<span class="badge ${cls}">${label}</span>`}${act}<button class="iconbtn" data-act="del-rv" data-id="${r.id}" title="Delete">🗑</button></div>
     ${r.none ? '' : `<div style="grid-column:1/-1">${ansBox('rev', r.id, r.answer)}</div>`}
-    ${r.status === 'resolved' && !r.none ? `<div class="res">${vers.length ? `Updated plot${vers.length > 1 ? 's' : ''} saved as ${vers.map(rv => `<a href="${L('/plot/' + rv.plotId)}" data-act="selver" data-id="${rv.id}"><b>${verLabel(rv)}</b></a> <span class="meta">${esc(plot(rv.plotId).name)}</span> ${ctxChip(rv.anvId)}`).join(', ')}<br><span class="mono">${vers.map(rv => esc(rv.fileName)).join(' · ')}</span><br>` : ''}${esc(r.resolution || '')}${addMore}</div>` : ''}</div>`;
+    ${r.status === 'resolved' && !r.none ? `<div class="res">${vers.length ? `Updated plot${vers.length > 1 ? 's' : ''} saved as ${vers.map(rv => `<a href="${L('/plot/' + rv.plotId)}" data-act="selver" data-id="${rv.id}"><b>${verLabel(rv)}</b></a> <span class="meta">${esc(plot(rv.plotId).name)}</span> ${ctxChip(rv.anvId)}`).join(', ')}<br><span class="mono">${vers.map(rv => esc(rv.fileName)).join(' · ')}</span><br>` : ''}${vers.length ? '' : esc(r.resolution || '')}${vers.length ? revNotes(r).map(n => `<div class="meta"><b>${esc(n.name)}</b> — changed: ${esc(n.what)}${n.why ? `<br>Why: ${esc(n.why)}` : ''}</div>`).join('') : ''}${addMore}</div>` : ''}</div>`;
 }
 /* a figure of the AN with all its plots (panels) and every comment about it */
 function figureCard(uses) {
@@ -873,52 +876,74 @@ const ERA_TAIL = /[_\-. ]?((?:UL)?20\d\d(?:[_\-]?(?:pre|post)(?:VFP|EE|BPix)?|EE
 function splitEra(stem) { const m = stem.match(ERA_TAIL); return m && m.index > 0 ? {base: stem.slice(0, m.index), era: m[1]} : {base: stem, era: ''}; }
 function bulkModal(catId) {
   if (!S.cats.length) return newCatModal(() => bulkModal());
-  needDraft();
-  const an = isAN();
+  const an = isAN(), cx = ctx(), pubs = [...S.anv].sort((a, b) => b.number - a.number);
+  const target = pubs.length ? field('These plots belong to', `<select name="tgt"><option value="">Working draft — for the next AN version</option>${pubs.map(v => `<option value="${v.id}" ${!cx.draft && cx.id === v.id ? 'selected' : ''}>${esc(anvLabel(v))} (already published) — its plots</option>`).join('')}</select>`,
+    'Choose a published version to upload the plots it already contains, so convener comments can be linked to them. They also show up in the working version as unchanged until you revise them; the published version itself is never altered.') : '';
   openModal({title: 'Upload many plots', xl: true, submit: 'Upload all',
-    sub: 'Choose all the images at once. A name like <b>electron_pt_2016postVFP.png</b> is read as the plot “electron_pt” for era 2016postVFP, and plots that share a name are grouped together as the panels of one figure.',
-    body: `<div class="cols">${field('Put them in', `<select name="cat">${catOptions(catId)}</select>`, 'A category or subcategory.')}${field('If a plot already exists, what changed?', '<input type="text" name="changes" maxlength="500" value="Updated plot." placeholder="e.g. Rebinned, new MVA training">', 'Used only for plots that already exist: they get a new version instead of a duplicate.')}</div>`
-      + `<label class="drop"><input class="vh" type="file" name="plots" accept="image/*" multiple><span class="dropmsg"><b style="color:var(--acc)">Choose images</b> (select many) or drag &amp; drop them here</span><img class="dpreview" hidden alt=""></label>`
+    sub: 'Choose all the images at once. The plot name is the file name without the extension, and a name like <b>electron_pt_2016postVFP.png</b> is also read as era 2016postVFP; plots that share a name part are grouped as the panels of one figure.',
+    body: `<div class="cols">${field('Put them in', `<select name="cat">${catOptions(catId)}</select>`, 'A category or subcategory. You can change it for single plots below.')}${target || field('If a plot already exists, what changed?', '<input type="text" name="changes" maxlength="500" value="Updated plot." placeholder="e.g. Rebinned, new MVA training">', 'Used for plots that already exist: they get a new version instead of a duplicate.')}</div>`
+      + (target ? field('If a plot already exists, what changed?', '<input type="text" name="changes" maxlength="500" value="Updated plot." placeholder="e.g. Rebinned, new MVA training">', 'Only used when you choose “Add as new version” for a plot that already exists.') : '')
+      + `<label class="drop"><input class="vh" type="file" name="plots" accept="image/*" multiple><span class="dropmsg"></span><img class="dpreview" hidden alt=""></label>`
       + '<div id="bulk" style="margin-top:14px"></div>',
     setup: f => {
-      const inp = f.plots, box = $('#bulk', f);
-      const files = () => [...inp.files].sort((a, b) => a.name.localeCompare(b.name, undefined, {numeric: true}));
+      const inp = f.plots, box = $('#bulk', f), sorted = () => [...inp.files].sort((a, b) => a.name.localeCompare(b.name, undefined, {numeric: true}));
+      const published = () => !!(f.tgt && f.tgt.value);
+      const refresh = () => {
+        const rows = [...box.querySelectorAll('tr[data-i]')], key = r => r.querySelector('[name^=ct]').value + '\u0000' + r.querySelector('[name^=nm]').value.trim();
+        const cnt = new Map(); rows.forEach(r => cnt.set(key(r), (cnt.get(key(r)) || 0) + 1));
+        rows.forEach(r => {
+          const nm = r.querySelector('[name^=nm]').value.trim(), cid = r.querySelector('[name^=ct]').value, sel = r.querySelector('[name^=act]'), st = r.querySelector('.st');
+          const ex = S.plots.find(p => p.catId === cid && p.name === nm), dup = cnt.get(key(r)) > 1;
+          st.innerHTML = !nm ? '<span class="badge pending">Needs a name</span>' : dup ? '<span class="badge pending">Name used twice — rename one</span>' : ex ? '<span class="badge s-updated">Already exists</span>' : '<span class="badge s-new">New plot</span>';
+          sel.hidden = !(ex && !dup); if (!sel.hidden && !sel.dataset.set) { sel.value = published() ? 'skip' : 'version'; sel.dataset.set = 1; }
+        });
+      };
       const draw = () => {
-        const fl = files(), cid = f.cat.value;
+        const fl = sorted(); $('.dpreview', f).style.display = 'none';
         $('.dropmsg', f).innerHTML = fl.length ? `<b>${fl.length} image${fl.length === 1 ? '' : 's'} chosen</b> — click to choose again` : '<b style="color:var(--acc)">Choose images</b> (select many) or drag &amp; drop them here';
-        $('.dpreview', f).style.display = 'none';
         if (!fl.length) { box.innerHTML = ''; return; }
         const groups = new Map(); fl.forEach((file, i) => { const stem = file.name.replace(/\.[^.]+$/, ''), sp = splitEra(stem); if (!groups.has(sp.base)) groups.set(sp.base, []); groups.get(sp.base).push({file, i, stem, era: sp.era}); });
         let g = 0, rows = '';
         for (const [base, items] of groups) {
-          rows += `<tr class="grp"><td colspan="3">${esc(base)} · ${items.length} file${items.length === 1 ? '' : 's'}</td><td>${an ? `<input type="text" name="fig${g}" maxlength="40" placeholder="Fig no. (optional)" >` : ''}</td></tr>`;
-          rows += items.map(it => { const ex = S.plots.find(p => p.catId === cid && p.name === it.stem);
-            return `<tr><td class="mono">${esc(it.file.name)}</td><td><input type="text" name="era${it.i}" maxlength="60" value="${esc(it.era)}" placeholder="panel / era"></td><td>${ex ? `<span class="badge s-updated">New version of existing plot</span>` : '<span class="badge s-new">New plot</span>'}</td><td><input type="hidden" name="grp${it.i}" value="${g}"></td></tr>`; }).join('');
+          rows += `<tr class="grp"><td colspan="5">${esc(base)} · ${items.length} file${items.length === 1 ? '' : 's'}</td><td>${an ? `<input type="text" name="fig${g}" maxlength="40" placeholder="Figure no.">` : ''}</td></tr>`;
+          rows += items.map(it => `<tr data-i="${it.i}" data-g="${g}"><td class="mono">${esc(it.file.name)}</td><td><input type="text" name="nm${it.i}" maxlength="150" value="${esc(it.stem)}"></td><td><input type="text" name="era${it.i}" maxlength="60" value="${esc(it.era)}" placeholder="era"></td>
+            <td><select name="ct${it.i}">${catOptions(f.cat.value)}</select></td><td><input type="text" name="loc${it.i}" maxlength="200" placeholder="p. 12 · Sec 3.2"></td><td><span class="st"></span><select name="act${it.i}" hidden><option value="version">Add as new version</option><option value="skip">Skip it</option></select></td></tr>`).join('');
           g++;
         }
-        box.innerHTML = `<div class="card bulk" style="overflow:auto;max-height:340px"><table><tr><th>File</th><th>Era / panel label</th><th>Result</th><th>${an ? 'Figure no.' : ''}</th></tr>${rows}</table></div><div class="h meta" style="margin-top:6px">${an ? 'Type a figure number on a group to record it as that figure of the AN with one panel per era; leave it empty to just upload the plots.' : 'The plots are named after the files.'} Fix any wrongly detected era before uploading.</div>`;
+        box.innerHTML = `<div class="card bulk" style="overflow:auto;max-height:360px"><table><tr><th>File</th><th>Plot name</th><th>Era / panel</th><th>Category</th><th>Location in the AN</th><th>${an ? 'Figure no. (groups)' : 'Result'}</th></tr>${rows}</table></div>
+          <div class="h meta" style="margin-top:6px">Check the names and eras it found and fill in the AN location if you like. ${an ? 'A figure number on a group records those plots as that figure (one panel per era) — needed to attach convener comments to them. A location like “Fig 5” also works.' : ''} If a plot with the same name already exists you choose what to do with it.</div>`;
+        refresh();
       };
-      inp.addEventListener('change', draw); f.cat.addEventListener('change', draw); $('.drop', f).addEventListener('drop', () => setTimeout(draw)); 
+      inp.addEventListener('change', draw); $('.drop', f).addEventListener('drop', () => setTimeout(draw));
+      f.cat.addEventListener('change', () => { box.querySelectorAll('select[name^=ct]').forEach(s => { s.value = f.cat.value; }); refresh(); });
+      if (f.tgt) f.tgt.addEventListener('change', () => { box.querySelectorAll('select[name^=act]').forEach(s => { s.value = published() ? 'skip' : 'version'; }); });
+      box.addEventListener('input', e => { if (e.target.matches('[name^=nm]')) refresh(); }); box.addEventListener('change', e => { if (e.target.matches('[name^=ct]')) refresh(); });
+      draw();
     },
     onSubmit: async (fd, f) => {
-      const fl = [...f.plots.files].sort((a, b) => a.name.localeCompare(b.name, undefined, {numeric: true}));
-      if (!fl.length) throw new Error('Choose the images first.');
-      const cid = fd.get('cat'), cx = ctx(), items = fl.map(file => { const i = fl.indexOf(file), stem = file.name.replace(/\.[^.]+$/, '');
-        return {file, stem, era: (fd.get('era' + i) || '').trim(), fig: an ? (fd.get('fig' + fd.get('grp' + i)) || '').trim() : ''}; });
-      const seen = new Set(); items.forEach(it => { if (seen.has(it.stem)) throw new Error(`Two files are called “${it.stem}”. Rename one.`); seen.add(it.stem); });
+      const files = [...f.plots.files].sort((a, b) => a.name.localeCompare(b.name, undefined, {numeric: true}));
+      if (!files.length) throw new Error('Choose the images first.');
+      const tgt = fd.get('tgt') || null, rows = [...f.querySelectorAll('#bulk tr[data-i]')];
+      const all = rows.map(r => { const i = +r.dataset.i, file = files[i]; return {file, stem: file.name.replace(/\.[^.]+$/, ''), name: (fd.get('nm' + i) || '').trim(), era: (fd.get('era' + i) || '').trim(), cid: fd.get('ct' + i), loc: (fd.get('loc' + i) || '').trim(), act: fd.get('act' + i) || 'version', fig: an ? (fd.get('fig' + r.dataset.g) || '').trim() : ''}; });
+      const seen = new Set(); all.forEach(it => { if (!it.name) throw new Error(`Give “${it.file.name}” a plot name.`); const k = it.cid + '\u0000' + it.name; if (seen.has(k)) throw new Error(`Two files are called “${it.name}” in the same category. Rename one.`); seen.add(k); });
+      all.forEach(it => { it.ex = S.plots.find(p => p.catId === it.cid && p.name === it.name); if (it.fig === '' && an) { const m = it.loc.match(/\bfig(?:ure)?\.?\s*([\w.\-]+)/i); if (m) it.fig = m[1]; } });
+      const items = all.filter(it => !(it.ex && it.act === 'skip')), skipped = all.length - items.length;
+      if (!items.length) throw new Error('Nothing to upload: every plot already exists and is set to be skipped.');
       const changes = fd.get('changes').trim() || 'Updated plot.', done = busy('Uploading 0 / ' + items.length + '…');
       try {
+        if (!tgt) needDraft();
         for (let k = 0; k < items.length; k++) { done.set(`Uploading ${k + 1} / ${items.length}…`); items[k].up = await upload(items[k].file); }
         done.set('Saving…'); let nNew = 0, nUpd = 0, nFig = 0;
         await batch(async () => {
           for (const it of items) {
-            const ex = S.plots.find(p => p.catId === cid && p.name === it.stem); let pid, vid;
-            if (ex) { const r = await api('POST', aurl(`/plots/${ex.id}/versions`), {file_id: it.up.file_id, summary: it.stem.slice(0, 140), changes, motivation: '', dataset: '', code: ''}); pid = ex.id; vid = r.id; nUpd++; }
-            else { const r = await api('POST', aurl('/plots'), {category_id: cid, name: it.stem, location: '', version: {file_id: it.up.file_id, summary: it.stem.slice(0, 140), changes: 'Initial version.', motivation: '', dataset: '', code: ''}}); pid = r.id; vid = r.version_id; nNew++; }
-            if (it.fig && !S.usages.some(u => u.type === 'note' && !u.anvId && u.fig === it.fig && ver(u.versionId) && ver(u.versionId).plotId === pid)) { await api('POST', aurl('/usages'), {plot_version_id: vid, type: 'note', an_version_id: cx.id, fig: it.fig, panel: it.era, an_ver: ''}); nFig++; }
+            const v = {file_id: it.up.file_id, summary: it.name.slice(0, 140), motivation: '', dataset: '', code: '', file_name: it.stem}; let pid, vid, fresh = false;
+            if (it.ex) { const r = await api('POST', aurl(`/plots/${it.ex.id}/versions`), {...v, changes}); pid = it.ex.id; vid = r.id; nUpd++; }
+            else { const r = await api('POST', aurl('/plots'), {category_id: it.cid, name: it.name, location: it.loc, an_version_id: tgt || undefined, version: {...v, changes: tgt ? 'Plot of the published version.' : 'Initial version.'}}); pid = r.id; vid = r.version_id; nNew++; fresh = true; }
+            if (it.fig && (!tgt || fresh) && !S.usages.some(u => u.type === 'note' && (u.anvId || null) === (tgt || null) && u.fig === it.fig && ver(u.versionId) && ver(u.versionId).plotId === pid)) { await api('POST', aurl('/usages'), {plot_version_id: vid, type: 'note', an_version_id: tgt, fig: it.fig, panel: it.era, an_ver: ''}); nFig++; }
           }
         });
-        await reload(); toast(`${nNew} new plot${nNew === 1 ? '' : 's'}, ${nUpd} updated${nFig ? `, ${nFig} placed in figures` : ''}.`);
+        if (tgt) setCtx(tgt);
+        await reload(); toast(`${nNew} new plot${nNew === 1 ? '' : 's'}${tgt ? ' in ' + anvLabel(anv(tgt)) : ''}, ${nUpd} new version${nUpd === 1 ? '' : 's'}${nFig ? `, ${nFig} placed in figures` : ''}${skipped ? `, ${skipped} skipped` : ''}.`);
       } finally { done(); }
     }});
 }
@@ -1016,30 +1041,60 @@ function reviewModal(u, r) {
     }});
 }
 function whoCode(r) { return r.name ? slug(r.name.replace(/\./g, ''), 10) : r.role.split(/\s+/).map(w => /\d/.test(w) ? w : w[0].toUpperCase()).join(''); }
+/* the plot a revised file replaces: same name, else same base name + same era, else (single file) the plot the comment is about */
+function matchPlot(stem, cands, ownPlot, single) {
+  const exact = cands.find(p => p.name === stem); if (exact) return exact;
+  const sp = splitEra(stem), ek = eraKeys(sp.era), same = cands.filter(p => { const q = splitEra(p.name); return q.base === sp.base && (!sp.era || !q.era || [...eraKeys(q.era)].some(k => ek.has(k))); });
+  if (same.length === 1) return same[0];
+  return single ? ownPlot : null;
+}
 function resolveModal(u, r, add) {
-  const figure = u.type === 'note', uses = figure ? sameFigUses(u) : [u], many = uses.length > 1, idx = u.reviews.filter(x => !x.none).indexOf(r) + 1;
-  const ctxPart = figure ? 'AN-Fig' + slug(u.fig, 8) : slug(meetingName(u), 10) + (u.slide ? '-s' + slug(u.slide, 6) : '');
-  const baseFor = use => { const v = ver(use.versionId), p = plot(v.plotId); return {v, p, base: `${slug(p.name, 24)}_v${v.num}_${ctxPart}_${whoCode(r)}-c${idx || 1}`, nextRev: Math.max(0, ...S.versions.filter(x => x.plotId === p.id && x.num === v.num).map(x => x.rev)) + 1}; };
-  const first = r.scope === 'panel' || !many ? uses.find(x => x.id === r.usage_id) || uses[0] : null, b0 = baseFor(first || uses[0]);
-  openModal({title: add ? 'Updated plot for another panel' : 'Mark as resolved', wide: true, submit: add ? 'Save updated plot' : 'Resolve', sub: `<b>${esc(whoStr(r))}</b>: “${esc(r.text)}”`,
-    body: (add ? '' : radios('mode', [['plot', 'Upload the updated plot'], ['noplot', 'Resolved without changing the plot']], 'plot'))
-      + `<div id="rp" style="display:grid;gap:14px">${many ? field('Which plot did you update?', `<select name="use" required><option value="">— choose the era / panel —</option>${uses.map(x => `<option value="${x.id}" ${first && x.id === first.id ? 'selected' : ''}>${esc(panelName(x))} — ${esc(plot(ver(x.versionId).plotId).name)} ${verLabel(ver(x.versionId))}</option>`).join('')}</select>`, r.scope === 'figure' ? 'This comment is about the whole figure, so pick the panel you are fixing. Use “Updated plot for another panel” afterwards to fix more.' : '') : ''}
-        ${field('Updated plot', fileField(false))}
-        ${field('What did you change to address it?', '<textarea name="changes" maxlength="3000" placeholder="e.g. Switched y-axis to log scale and extended range to 10⁶."></textarea>')}
-        ${field('Saved as', `<input type="text" name="fname" maxlength="140" value="${esc(b0.base)}_" class="mono">`, `<span id="fhint">Stored as <b>${verLabel({num: b0.v.num, rev: b0.nextRev})}</b>, linked to ${verLabel(b0.v)}, in the working draft.</span> Finish the name with a few words describing the change, e.g. <span class="mono">log-y-axis</span>.`)}</div>
-      <div id="rn" hidden>${field('How was it resolved?', '<textarea name="note" maxlength="3000" placeholder="e.g. Explained in reply; reviewer accepted the current binning."></textarea>')}</div>`,
+  const figure = u.type === 'note', uses = figure ? sameFigUses(u) : [u];
+  const ownPlot = plot(ver(u.versionId).plotId), figPlots = [...new Map(uses.map(x => { const p = plot(ver(x.versionId).plotId); return [p.id, p]; })).values()];
+  const others = visPlots().filter(p => !figPlots.some(q => q.id === p.id));
+  const plotOpts = cur => `<option value="">— choose the plot it replaces —</option><optgroup label="${figure ? 'In this figure' : 'This plot'}">${figPlots.map(p => `<option value="${p.id}" ${cur && cur.id === p.id ? 'selected' : ''}>${esc(p.name)} (${verLabel(latest(p.id))})</option>`).join('')}</optgroup>${others.length ? `<optgroup label="Other plots">${others.map(p => `<option value="${p.id}" ${cur && cur.id === p.id ? 'selected' : ''}>${esc(catPath(p.catId))} — ${esc(p.name)} (${verLabel(latest(p.id))})</option>`).join('')}</optgroup>` : ''}`;
+  openModal({title: add ? 'Add revised plots' : 'Answer and resolve', xl: true, submit: add ? 'Save revised plots' : 'Save and resolve', sub: `<b>${esc(whoStr(r))}</b>: “${esc(r.text)}”`,
+    body: field('Your response to this comment', `<textarea name="answer" rows="3" maxlength="5000" placeholder="Write your reply to the convener…">${esc(r.answer || '')}</textarea>`, 'The reasons you give for each revised plot below are added to this response automatically, so do not type them twice.', true)
+      + (add ? '' : radios('mode', [['plot', 'Add revised plot(s)'], ['noplot', 'Resolve without changing a plot']], 'plot'))
+      + `<div id="rp"><label class="drop"><input class="vh" type="file" name="rfiles" accept="image/*" multiple><span class="dropmsg"></span><img class="dpreview" hidden alt=""></label><div id="rlist" style="margin-top:12px"></div></div>`
+      + `<div id="rn" hidden>${field('How was it resolved?', '<textarea name="note" maxlength="3000" placeholder="e.g. Explained in reply; reviewer accepted the current binning."></textarea>')}</div>`,
     setup: f => {
-      const upd = () => { const pl = add || f.mode.value === 'plot'; $('#rp', f).hidden = !pl; $('#rn', f).hidden = pl; f.file.required = pl; f.changes.required = pl; f.note.required = !pl; if (f.use) f.use.required = pl; };
-      if (!add) f.querySelectorAll('[name=mode]').forEach(x => x.addEventListener('change', upd)); upd();
-      if (f.use) f.use.addEventListener('change', () => { const use = uses.find(x => x.id === f.use.value); if (!use) return; const b = baseFor(use); f.fname.value = b.base + '_'; $('#fhint', f).innerHTML = `Stored as <b>${verLabel({num: b.v.num, rev: b.nextRev})}</b>, linked to ${verLabel(b.v)}, in the working draft.`; });
+      const inp = f.rfiles, list = $('#rlist', f), sorted = () => [...inp.files].sort((a, b) => a.name.localeCompare(b.name, undefined, {numeric: true}));
+      const msg = () => { const n = inp.files.length; $('.dropmsg', f).innerHTML = n ? `<b>${n} revised plot${n === 1 ? '' : 's'} chosen</b> — click to choose again` : '<b style="color:var(--acc)">Choose the revised PNG file(s)</b> — several at once if the comment needs more than one plot'; };
+      const upd = () => { const pl = add || f.mode.value === 'plot'; $('#rp', f).hidden = !pl; $('#rn', f).hidden = pl; f.note.required = !pl; };
+      const draw = () => {
+        msg(); $('.dpreview', f).style.display = 'none'; const fl = sorted();
+        list.innerHTML = fl.map((file, i) => { const stem = file.name.replace(/\.[^.]+$/, ''), m = matchPlot(stem, [...figPlots, ...others], ownPlot, fl.length === 1);
+          return `<div class="card revrow" data-i="${i}" style="padding:12px 14px;margin-bottom:10px"><div class="cols"><div class="f"><label class="l">New file → plot name <span class="meta">(taken from the file name)</span></label><div class="mono" style="padding:6px 0">${esc(stem)}</div></div>
+            <div class="f"><label class="l">Plot it replaces</label><select name="rp${i}" required>${plotOpts(m)}</select><div class="h rinfo"></div></div></div>
+            <div class="cols"><div class="f"><label class="l">What changed compared with the previous version?</label><textarea name="rc${i}" required maxlength="3000" rows="3" placeholder="e.g. Updated the Data/MC comparison after revising the background normalisation."></textarea></div>
+            <div class="f"><label class="l">Why was it changed?</label><textarea name="rw${i}" required maxlength="3000" rows="3" placeholder="e.g. The convener asked about the Data/MC disagreement at high pT."></textarea></div></div></div>`; }).join('')
+          + (fl.length > 1 ? '<button type="button" class="btn sm" id="rcopy">Copy the first row’s text to all rows</button>' : '');
+        list.querySelectorAll('select').forEach(s => s.dispatchEvent(new Event('change', {bubbles: true})));
+      };
+      list.addEventListener('change', e => { if (!e.target.matches('select[name^=rp]')) return; const p = plot(e.target.value), row = e.target.closest('.revrow'), box = $('.rinfo', row);
+        box.textContent = p ? `Replaces ${p.name} ${verLabel(latest(p.id))} in the working version; the earlier version stays in its history.` : 'Pick the plot this file is a new version of.'; });
+      list.addEventListener('click', e => { if (e.target.id !== 'rcopy') return; const a = list.querySelector('[name=rc0]').value, b = list.querySelector('[name=rw0]').value; list.querySelectorAll('[name^=rc]').forEach(x => { if (!x.value) x.value = a; }); list.querySelectorAll('[name^=rw]').forEach(x => { if (!x.value) x.value = b; }); });
+      inp.addEventListener('change', draw); $('.drop', f).addEventListener('drop', () => setTimeout(draw));
+      if (!add) f.querySelectorAll('[name=mode]').forEach(x => x.addEventListener('change', upd)); upd(); msg();
     },
-    onSubmit: async fd => {
+    onSubmit: async (fd, f) => {
+      const answer = fd.get('answer').trim();
       if (add || fd.get('mode') === 'plot') {
-        const file = fd.get('file'); if (!file || !file.size) throw new Error('Please choose the updated plot');
-        const up = await upload(file);
-        await api('POST', aurl(`/reviews/${r.id}/resolve`), {mode: 'plot', add: !!add, usage_id: fd.get('use') || undefined, file_id: up.file_id, changes: fd.get('changes').trim(), file_name: fd.get('fname').trim().replace(/[-_.]+$/, '')});
-        toast('Updated plot saved in the working draft');
-      } else { await api('POST', aurl(`/reviews/${r.id}/resolve`), {mode: 'noplot', note: fd.get('note').trim()}); toast('Marked as resolved'); }
+        const files = [...f.rfiles.files].sort((a, b) => a.name.localeCompare(b.name, undefined, {numeric: true}));
+        if (!files.length) throw new Error('Please choose the revised plot file(s).');
+        const items = files.map((file, i) => ({file, stem: file.name.replace(/\.[^.]+$/, ''), plot_id: fd.get('rp' + i), changes: (fd.get('rc' + i) || '').trim(), why: (fd.get('rw' + i) || '').trim()}));
+        const pids = new Set(); items.forEach(it => { if (!it.plot_id) throw new Error(`Choose the plot that “${it.stem}” replaces.`); if (pids.has(it.plot_id)) throw new Error('Two files replace the same plot. Add one of them in a separate step.'); pids.add(it.plot_id); });
+        needDraft(); const done = busy('Uploading revised plots…');
+        try {
+          for (const it of items) it.up = await upload(it.file);
+          await api('POST', aurl(`/reviews/${r.id}/revise`), {answer, items: items.map(it => ({file_id: it.up.file_id, plot_id: it.plot_id, changes: it.changes, why: it.why, file_name: it.stem}))});
+        } finally { done(); }
+        toast(`${items.length} revised plot${items.length === 1 ? '' : 's'} saved in the working draft`);
+      } else {
+        await batch(async () => { await api('POST', aurl(`/reviews/${r.id}/answer`), {answer}); await api('POST', aurl(`/reviews/${r.id}/resolve`), {mode: 'noplot', note: fd.get('note').trim()}); });
+        toast('Marked as resolved');
+      }
       await reload();
     }});
 }
@@ -1227,6 +1282,15 @@ const A = {
   pickA: el => { ui.A = el.value; render(); }, pickB: el => { ui.B = el.value; render(); },
   pfilter: el => { ui.pf = el.dataset.id; render(); }, rfilter: el => { ui.rf = el.dataset.id; render(); },
   zoom: async el => lightbox(await imageUrl(ver(el.dataset.id))),
+  'restore-ver': async el => {
+    const v = ver(el.dataset.id), p = plot(v.plotId); if (!confirm(`Save ${verLabel(v)} of “${p.name}” again as the newest version? Nothing is deleted; the current newest stays in the history.`)) return;
+    needDraft(); const done = busy('Restoring…');
+    try {
+      const blob = await (await fetch(await imageUrl(v))).blob(), up = await upload(new File([blob], v.fileName, {type: blob.type}));
+      const r = await api('POST', aurl(`/plots/${p.id}/versions`), {file_id: up.file_id, summary: v.summary, changes: `Restored ${verLabel(v)}.`, motivation: '', dataset: v.dataset, code: v.code, file_name: v.fileName.replace(/\.[^.]+$/, '')});
+      ui.sel[p.id] = r.id; await reload(); toast('Restored as a new version');
+    } finally { done(); }
+  },
   download: async el => { const v = ver(el.dataset.id); const a = document.createElement('a'); a.href = await imageUrl(v); a.download = v.fileName; a.click(); },
   'del-ver': el => { const v = ver(el.dataset.id), kids = S.versions.filter(x => x.parentId === v.id).length;
     confirmBox('Delete version', `Delete ${verLabel(v)}${kids ? ` and its ${kids} revision(s)` : ''}, including its meeting/AN records?`, 'Delete', async () => { await api('DELETE', aurl('/plot-versions/' + v.id)); ui.sel[v.plotId] = null; await reload(); }); },

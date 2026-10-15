@@ -455,7 +455,9 @@ const H = {
     const cat = byId(st.categories, sv(b, 'category_id', 40, true), 'Category'), name = sv(b, 'name', 150, true);
     if (st.plots.some(p => p.category_id === cat.id && p.name === name)) throw E(409, 'A plot with this name already exists in that category');
     const p = {id: nid(), analysis_id: st.analysis.id, category_id: cat.id, name, location: sv(b, 'location', 200), created: now()}; st.plots.push(p);
-    const vid = makeVersion(st, io, p.id, b.version || {}); return {id: p.id, version_id: vid};
+    const vid = makeVersion(st, io, p.id, b.version || {});
+    if (b.an_version_id) { const av = byId(st.an_versions, sv(b, 'an_version_id', 40, true), 'AN version'); st.plot_versions.find(v => v.id === vid).an_version_id = av.id; }   // plot of an already published AN version (first version only)
+    return {id: p.id, version_id: vid};
   }, {message: 'Add plot'}),
   updatePlot: ({aid, id}, b) => tx(aid, st => {
     const p = byId(st.plots, id, 'Plot'), name = sv(b, 'name', 150, false, p.name) || p.name, cid = b.category_id ? byId(st.categories, b.category_id, 'Category').id : p.category_id;
@@ -535,6 +537,27 @@ const H = {
     else throw E(400, 'Invalid mode');
     return {ok: true};
   }, {message: 'Resolve feedback'}),
+
+  /* answer a comment with one or more revised plots: each replaces the plot in the working version (older versions stay in its history) */
+  reviseReview: ({aid, id}, b) => tx(aid, (st, io) => {
+    const rv = findReview(st, id); if (rv.none) throw E(400, 'There is no comment to resolve');
+    const items = Array.isArray(b.items) ? b.items : []; if (!items.length) throw E(400, 'Add at least one revised plot'); if (items.length > 40) throw E(400, 'Too many plots at once (max 40)');
+    if (b.answer !== undefined) rv.answer = sv(b, 'answer', 5000);
+    const seen = new Set(), vids = [], lines = [];
+    for (const it of items) {
+      const p = byId(st.plots, sv(it, 'plot_id', 40, true), 'Plot'); if (seen.has(p.id)) throw E(400, 'Two revised files are for the same plot'); seen.add(p.id);
+      const vs = st.plot_versions.filter(v => v.plot_id === p.id).sort((x, y) => x.num - y.num || x.rev - y.rev), prev = vs[vs.length - 1];
+      const changes = sv(it, 'changes', 3000, true), why = sv(it, 'why', 3000);
+      vids.push(makeVersion(st, io, p.id, {file_id: it.file_id, summary: (prev.summary + ' - revised after review').slice(0, 140), changes,
+        motivation: why || `Response to ${rv.role}${rv.name ? ' · ' + rv.name : ''}: ${rv.text}`.slice(0, 3000), dataset: prev.dataset, code: prev.code}, prev, rv.id, sv(it, 'file_name', 150) || null));
+      lines.push(`${p.name}: ${changes}`);
+    }
+    const was = rv.status === 'resolved';
+    vids.forEach(v => { if (!rv.resolved_version_id) rv.resolved_version_id = v; else rv.resolved_more.push(v); });
+    rv.resolution = (was ? rv.resolution + '\n' : '') + lines.join('\n'); rv.resolution = rv.resolution.trim();
+    if (!was) { rv.status = 'resolved'; rv.resolved_at = now(); }
+    return {ok: true, versions: vids};
+  }, {message: 'Answer comment with revised plot(s)'}),
 
   /* ---- comments on the AN text / tables / methodology (not tied to a plot) ---- */
   createAnComment: ({aid}, b) => tx(aid, st => {
@@ -684,6 +707,7 @@ const ROUTES = [
   R('POST', A_ + `\\/usages\\/(?<uid>${ID})\\/reviews$`, H.createReview),
   R('PATCH', A_ + `\\/reviews\\/(?<id>${ID})$`, H.updateReview), R('DELETE', A_ + `\\/reviews\\/(?<id>${ID})$`, H.deleteReview),
   R('POST', A_ + `\\/reviews\\/(?<id>${ID})\\/resolve$`, H.resolveReview),
+  R('POST', A_ + `\\/reviews\\/(?<id>${ID})\\/revise$`, H.reviseReview),
   R('POST', A_ + '\\/an-comments$', H.createAnComment), R('PATCH', A_ + `\\/an-comments\\/(?<id>${ID})$`, H.updateAnComment), R('DELETE', A_ + `\\/an-comments\\/(?<id>${ID})$`, H.deleteAnComment),
   R('POST', A_ + `\\/an-comments\\/(?<id>${ID})\\/resolve$`, H.resolveAnComment), R('POST', A_ + `\\/an-comments\\/(?<id>${ID})\\/reopen$`, H.reopenAnComment),
   R('POST', A_ + '\\/import-comments$', H.importComments), R('POST', A_ + '\\/presented$', H.setPresented),
