@@ -580,7 +580,7 @@ function viewCat(id) {
   const empty = !S.plots.some(p => p.catId === id) && !kids.length;
   return `${banner()}<div class="crumbs">${crumbsFor(id)}</div>
     <div class="pagehead"><div><h1>${esc(c.name)}</h1><p>${all.length} plot${all.length === 1 ? '' : 's'}${kids.length ? ` in ${kids.length} subcategor${kids.length === 1 ? 'y' : 'ies'} and here` : ''}</p></div>
-    <div class="actions"><button class="btn" data-act="new-sub" data-id="${id}">+ Subcategory</button><button class="btn" data-act="edit-cat" data-id="${id}">Rename / move</button>${empty ? `<button class="btn danger" data-act="del-cat" data-id="${id}">Delete</button>` : ''}<button class="btn primary" data-act="new-plot" data-id="${id}">+ New plot</button></div></div>
+    <div class="actions"><button class="btn" data-act="new-sub" data-id="${id}">+ Subcategory</button><button class="btn" data-act="edit-cat" data-id="${id}">Rename / move</button>${empty ? `<button class="btn danger" data-act="del-cat" data-id="${id}">Delete</button>` : ''}<button class="btn" data-act="bulk-plots" data-id="${id}">Upload many plots</button><button class="btn primary" data-act="new-plot" data-id="${id}">+ New plot</button></div></div>
     ${kids.length ? `<div class="sechead"><h2>Subcategories</h2></div><div class="grid">${subCards}</div>` : ''}
     ${ps.length || !kids.length ? `${kids.length ? '<div class="sechead"><h2>Plots directly in ' + esc(c.name) + '</h2></div>' : ''}${ps.length ? `<div class="grid">${cards}</div>` : '<div class="card empty">No plots in this category' + (ctx().draft ? '' : ' at this AN version') + '. Use <b>+ New plot</b>, or <b>+ Subcategory</b> to organise them further.</div>'}` : ''}`;
 }
@@ -868,6 +868,60 @@ function editPlotModal(p) {
       + field('Location in the AN', `<input type="text" name="location" maxlength="200" value="${esc(p.location)}" placeholder="e.g. p. 12 · Sec 3.2 · Fig 5">`, 'The page, section, subsection or figure number where this plot appears.', true),
     onSubmit: async fd => { await api('PATCH', aurl('/plots/' + p.id), {name: fd.get('name').trim(), category_id: fd.get('cat'), location: fd.get('location').trim()}); await reload(); toast('Saved'); }});
 }
+/* ---- upload many plots at once: electron_pt_2016postVFP.png -> plot "electron_pt_2016postVFP", panel "2016postVFP" of group "electron_pt" ---- */
+const ERA_TAIL = /[_\-. ]?((?:UL)?20\d\d(?:[_\-]?(?:pre|post)(?:VFP|EE|BPix)?|EE|BPix)?|UL1[678](?:[_\-]?(?:pre|post))?)$/i;
+function splitEra(stem) { const m = stem.match(ERA_TAIL); return m && m.index > 0 ? {base: stem.slice(0, m.index), era: m[1]} : {base: stem, era: ''}; }
+function bulkModal(catId) {
+  if (!S.cats.length) return newCatModal(() => bulkModal());
+  needDraft();
+  const an = isAN();
+  openModal({title: 'Upload many plots', xl: true, submit: 'Upload all',
+    sub: 'Choose all the images at once. A name like <b>electron_pt_2016postVFP.png</b> is read as the plot “electron_pt” for era 2016postVFP, and plots that share a name are grouped together as the panels of one figure.',
+    body: `<div class="cols">${field('Put them in', `<select name="cat">${catOptions(catId)}</select>`, 'A category or subcategory.')}${field('If a plot already exists, what changed?', '<input type="text" name="changes" maxlength="500" value="Updated plot." placeholder="e.g. Rebinned, new MVA training">', 'Used only for plots that already exist: they get a new version instead of a duplicate.')}</div>`
+      + `<label class="drop"><input class="vh" type="file" name="plots" accept="image/*" multiple><span class="dropmsg"><b style="color:var(--acc)">Choose images</b> (select many) or drag &amp; drop them here</span><img class="dpreview" hidden alt=""></label>`
+      + '<div id="bulk" style="margin-top:14px"></div>',
+    setup: f => {
+      const inp = f.plots, box = $('#bulk', f);
+      const files = () => [...inp.files].sort((a, b) => a.name.localeCompare(b.name, undefined, {numeric: true}));
+      const draw = () => {
+        const fl = files(), cid = f.cat.value;
+        $('.dropmsg', f).innerHTML = fl.length ? `<b>${fl.length} image${fl.length === 1 ? '' : 's'} chosen</b> — click to choose again` : '<b style="color:var(--acc)">Choose images</b> (select many) or drag &amp; drop them here';
+        $('.dpreview', f).style.display = 'none';
+        if (!fl.length) { box.innerHTML = ''; return; }
+        const groups = new Map(); fl.forEach((file, i) => { const stem = file.name.replace(/\.[^.]+$/, ''), sp = splitEra(stem); if (!groups.has(sp.base)) groups.set(sp.base, []); groups.get(sp.base).push({file, i, stem, era: sp.era}); });
+        let g = 0, rows = '';
+        for (const [base, items] of groups) {
+          rows += `<tr class="grp"><td colspan="3">${esc(base)} · ${items.length} file${items.length === 1 ? '' : 's'}</td><td>${an ? `<input type="text" name="fig${g}" maxlength="40" placeholder="Fig no. (optional)" >` : ''}</td></tr>`;
+          rows += items.map(it => { const ex = S.plots.find(p => p.catId === cid && p.name === it.stem);
+            return `<tr><td class="mono">${esc(it.file.name)}</td><td><input type="text" name="era${it.i}" maxlength="60" value="${esc(it.era)}" placeholder="panel / era"></td><td>${ex ? `<span class="badge s-updated">New version of existing plot</span>` : '<span class="badge s-new">New plot</span>'}</td><td><input type="hidden" name="grp${it.i}" value="${g}"></td></tr>`; }).join('');
+          g++;
+        }
+        box.innerHTML = `<div class="card bulk" style="overflow:auto;max-height:340px"><table><tr><th>File</th><th>Era / panel label</th><th>Result</th><th>${an ? 'Figure no.' : ''}</th></tr>${rows}</table></div><div class="h meta" style="margin-top:6px">${an ? 'Type a figure number on a group to record it as that figure of the AN with one panel per era; leave it empty to just upload the plots.' : 'The plots are named after the files.'} Fix any wrongly detected era before uploading.</div>`;
+      };
+      inp.addEventListener('change', draw); f.cat.addEventListener('change', draw); $('.drop', f).addEventListener('drop', () => setTimeout(draw)); 
+    },
+    onSubmit: async (fd, f) => {
+      const fl = [...f.plots.files].sort((a, b) => a.name.localeCompare(b.name, undefined, {numeric: true}));
+      if (!fl.length) throw new Error('Choose the images first.');
+      const cid = fd.get('cat'), cx = ctx(), items = fl.map(file => { const i = fl.indexOf(file), stem = file.name.replace(/\.[^.]+$/, '');
+        return {file, stem, era: (fd.get('era' + i) || '').trim(), fig: an ? (fd.get('fig' + fd.get('grp' + i)) || '').trim() : ''}; });
+      const seen = new Set(); items.forEach(it => { if (seen.has(it.stem)) throw new Error(`Two files are called “${it.stem}”. Rename one.`); seen.add(it.stem); });
+      const changes = fd.get('changes').trim() || 'Updated plot.', done = busy('Uploading 0 / ' + items.length + '…');
+      try {
+        for (let k = 0; k < items.length; k++) { done.set(`Uploading ${k + 1} / ${items.length}…`); items[k].up = await upload(items[k].file); }
+        done.set('Saving…'); let nNew = 0, nUpd = 0, nFig = 0;
+        await batch(async () => {
+          for (const it of items) {
+            const ex = S.plots.find(p => p.catId === cid && p.name === it.stem); let pid, vid;
+            if (ex) { const r = await api('POST', aurl(`/plots/${ex.id}/versions`), {file_id: it.up.file_id, summary: it.stem.slice(0, 140), changes, motivation: '', dataset: '', code: ''}); pid = ex.id; vid = r.id; nUpd++; }
+            else { const r = await api('POST', aurl('/plots'), {category_id: cid, name: it.stem, location: '', version: {file_id: it.up.file_id, summary: it.stem.slice(0, 140), changes: 'Initial version.', motivation: '', dataset: '', code: ''}}); pid = r.id; vid = r.version_id; nNew++; }
+            if (it.fig && !S.usages.some(u => u.type === 'note' && !u.anvId && u.fig === it.fig && ver(u.versionId) && ver(u.versionId).plotId === pid)) { await api('POST', aurl('/usages'), {plot_version_id: vid, type: 'note', an_version_id: cx.id, fig: it.fig, panel: it.era, an_ver: ''}); nFig++; }
+          }
+        });
+        await reload(); toast(`${nNew} new plot${nNew === 1 ? '' : 's'}, ${nUpd} updated${nFig ? `, ${nFig} placed in figures` : ''}.`);
+      } finally { done(); }
+    }});
+}
 /* a category, with optional subcategories created together (comma or new-line separated) */
 function newCatModal(then, parentId) {
   const parent = parentId ? cat(parentId) : null;
@@ -1151,6 +1205,7 @@ const A = {
   'edit-cat': el => editCatModal(cat(el.dataset.id)),
   'edit-plot': el => editPlotModal(plot(el.dataset.id)),
   'new-plot': el => newPlotModal(el.dataset.id),
+  'bulk-plots': el => bulkModal(el.dataset.id),
   'del-cat': el => { const c = cat(el.dataset.id), back = c.parentId ? L('/cat/' + c.parentId) : L(''); confirmBox('Delete category', `Delete the empty category “${esc(c.name)}”?`, 'Delete', async () => { await api('DELETE', aurl('/categories/' + el.dataset.id)); await loadAnalysis(S.an.id); go(back); render(); }); },
   'new-ver': el => newVersionModal(el.dataset.id),
   selver: el => {

@@ -121,3 +121,5 @@ the "Designed & built by" credit in the footer should stay. The bundled PDF.js (
 ## How to cite
 Nanda, S. (2026). *Analysis-Tracker* [Software]. Zenodo. https://doi.org/10.5281/zenodo.23377664
 This DOI always points to the latest version. Each release also has its own version DOI, listed on the Zenodo page.
+
+- **Upload many plots at once**: on a category page, **Upload many plots**. Name files `<name>_<era>.png` (for example `bdt_input_pt_2016postVFP.png`); the era is read from the end of the name, files with the same name are grouped, and typing a figure number records the group as one AN figure with one panel per era. A plot that already exists gets a new version instead of a duplicate.
