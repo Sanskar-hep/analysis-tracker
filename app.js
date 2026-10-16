@@ -555,7 +555,7 @@ function viewMeetings() {
       ${uses.length ? `<div class="meta" style="margin:6px 0 0">Comments on plots</div>${usageList(uses, '')}` : ''}`;
   }).join('');
   return `<div class="pagehead"><div><h1>Meetings</h1><p>${all.length} meeting${all.length === 1 ? '' : 's'} · ${nP} pending comment${nP === 1 ? '' : 's'}. Comments about a plot and general methodology suggestions.</p></div>
-    <div class="actions"><button class="btn" data-act="import-email" data-type="meeting">Import comments from email</button><button class="btn" data-act="add-mplot">+ Plot shown in a meeting</button><button class="btn primary" data-act="add-mcomment">+ Methodology comment</button></div></div>
+    <div class="actions"><button class="btn" data-act="import-email" data-type="meeting">Import comments from email</button><button class="btn" data-act="add-mplot">+ Plot shown in a meeting</button><button class="btn danger" data-act="del-all-comments" data-scope="meeting">Delete all comments</button><button class="btn primary" data-act="add-mcomment">+ Methodology comment</button></div></div>
     ${names.length > 1 ? `<div class="chips" style="margin-bottom:6px">${['all', ...names].map(n => `<span class="chip ${f === n ? 'on' : ''}" data-act="mfilter" data-id="${esc(n)}">${n === 'all' ? 'All meetings' : esc(n)}</span>`).join('')}</div>` : ''}
     ${sections || '<div class="card empty">No meetings recorded yet. Use <b>+ Plot shown in a meeting</b> (a plot you presented), <b>+ Methodology comment</b> (a general suggestion), or open a plot and choose <b>+ Meeting</b>.</div>'}`;
 }
@@ -574,7 +574,7 @@ function viewReviewer() {
   const kinds = [...new Set(ancAll.map(x => x.kind))];
   const pdf = c.v.pdf;
   return `${banner()}<div class="pagehead"><div><h1>AN review · ${c.label}</h1><p>${nP} open · ${all.length - nP} resolved. These comments stay with ${c.label} even after newer versions are published.<br><span class="meta">AN PDF: ${pdf ? esc(pdf.name) + (pdf.file_id ? ' (stored in the repository: opens on any device)' : ' (kept on your computer only)') : 'not recorded yet'} — use <b>Open the AN PDF</b>.</span></p></div>
-    <div class="actions"><button class="btn" data-act="open-pdf" data-v="${c.id}">Open the AN PDF${pdf ? '' : ' …'}</button><button class="btn" data-act="import-email" data-type="note">Import comments from email</button><button class="btn" data-act="add-figure">+ Figure with several plots</button><button class="btn" data-act="reply-doc">Reply document</button><button class="btn primary" data-act="add-anc">+ Add comment</button></div></div>
+    <div class="actions"><button class="btn" data-act="open-pdf" data-v="${c.id}">Open the AN PDF${pdf ? '' : ' …'}</button><button class="btn" data-act="import-email" data-type="note">Import comments from email</button><button class="btn" data-act="add-figure">+ Figure with several plots</button><button class="btn" data-act="link-comments" title="Put the comments that mention a figure onto that figure">Link comments to figures</button><button class="btn danger" data-act="del-all-comments" data-scope="an">Delete all comments</button><button class="btn" data-act="reply-doc">Reply document</button><button class="btn primary" data-act="add-anc">+ Add comment</button></div></div>
     <div class="chips" style="margin-bottom:6px">${[['all', 'All'], ['pending', 'Open'], ['resolved', 'Resolved']].map(([k, l]) => `<span class="chip ${f === k ? 'on' : ''}" data-act="rfilter" data-id="${k}">${l}</span>`).join('')}</div>
     <div class="sechead"><h2>Comments on figures <span class="count">${figShown.length}</span></h2></div>
     ${figShown.length ? figGroups(figShown).map(figureCard).join('') : '<div class="card empty">No comments on figures yet. Figures appear here when a plot is recorded as an AN figure (open a plot → <b>+ Analysis Note</b>, or use <b>+ Figure with several plots</b>) and a comment is added to it.</div>'}
@@ -1350,6 +1350,22 @@ const A = {
   'add-mplot': () => meetingPlotModal(),
   'add-mcomment': () => ancModal(null, 'meeting'),
   mfilter: el => { ui.mf = el.dataset.id; render(); }, kfilter: el => { ui.rk = el.dataset.id; render(); },
+  'link-comments': () => SCAN.linkComments(ctx().id),
+  'del-all-comments': el => {
+    const meet = el.dataset.scope === 'meeting', cx = ctx(); if (!meet && !cx.id) { toast('Select a published AN version in the “Viewing” menu first.', 'err'); return; }
+    const nF = S.usages.filter(u => meet ? u.type !== 'note' : (u.type === 'note' && u.anvId === cx.id)).reduce((n, u) => n + u.reviews.filter(r => !r.none).length, 0);
+    const nA = S.anc.filter(c => meet ? c.source === 'meeting' : (c.source === 'an' && c.anvId === cx.id)).length, label = meet ? 'meetings' : anvLabel(anv(cx.id));
+    if (!nF && !nA) { toast('There are no comments to delete here.'); return; }
+    openModal({title: `Delete all comments of ${label}`, submit: 'Delete all', sub: `This permanently deletes <b>${nF + nA}</b> comment${nF + nA === 1 ? '' : 's'} (${nF} on plots, ${nA} not about a plot), with their responses and PDF placements. Plots, figures and revised plots are kept.`,
+      body: `<p style="margin-top:0">Save a backup first if you may need them:</p><p><button type="button" class="btn" id="bkp">Download all comments and responses (.md)</button></p>`
+        + field('Type DELETE to confirm', '<input type="text" name="sure" autocomplete="off" placeholder="DELETE">'),
+      setup: f => { $('#bkp', f).onclick = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([REL.commentsMd()], {type: 'text/markdown'})); a.download = 'Comments_and_Responses.md'; document.body.appendChild(a); a.click(); a.remove(); }; },
+      onSubmit: async fd => {
+        if (fd.get('sure').trim() !== 'DELETE') throw new Error('Type DELETE (in capital letters) to confirm.');
+        const r = await api('POST', aurl('/delete-comments'), {scope: meet ? 'meeting' : 'an', an_version_id: meet ? undefined : cx.id});
+        await reload(); toast(`Deleted ${r.reviews + r.comments} comment${r.reviews + r.comments === 1 ? '' : 's'}.`);
+      }});
+  },
   'add-anc': () => ancModal(), 'reply-doc': () => replyModal(), 'edit-anc': el => ancModal(S.anc.find(c => c.id === el.dataset.id)),
   'resolve-anc': el => resolveAncModal(S.anc.find(c => c.id === el.dataset.id)),
   'reopen-anc': async el => { await api('POST', aurl(`/an-comments/${el.dataset.id}/reopen`)); await reload(); },

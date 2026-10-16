@@ -599,6 +599,15 @@ const H = {
       scope: b.scope === 'figure' ? 'figure' : 'panel', resolved_more: [], status: c.status || 'pending', resolved_version_id: null, resolution: c.resolution || '', resolved_at: c.resolved_at || null, created: c.created});
     st.an_comments = st.an_comments.filter(x => x.id !== c.id); return {ok: true};
   }, {message: 'Attach comment to a figure'}),
+  /* delete every comment of one kind in one go: all comments of an AN version (on figures and plain), or all meeting comments. Plots, figures and revised plots stay. */
+  deleteAllComments: ({aid}, b) => tx(aid, st => {
+    const scope = sv(b, 'scope', 10, true); if (!['an', 'meeting'].includes(scope)) throw E(400, 'Invalid scope');
+    const ver = scope === 'an' ? byId(st.an_versions, sv(b, 'an_version_id', 40, true), 'AN version') : null, ids = new Set(); let nR = 0;
+    st.usages.filter(u => scope === 'an' ? (u.type === 'note' && u.an_version_id === ver.id) : u.type !== 'note').forEach(u => { u.reviews.forEach(r => ids.add(r.id)); nR += u.reviews.filter(r => !r.none).length; u.reviews = []; });
+    const before = st.an_comments.length; st.an_comments = st.an_comments.filter(c => !(scope === 'an' ? (c.source === 'an' && c.an_version_id === ver.id) : c.source === 'meeting'));
+    st.plot_versions.forEach(v => { if (v.review_id && ids.has(v.review_id)) v.review_id = null; });
+    return {reviews: nR, comments: before - st.an_comments.length};
+  }, {message: 'Delete all comments'}),
   deleteAnComment: ({aid, id}) => tx(aid, st => { byId(st.an_comments, id, 'Comment'); st.an_comments = st.an_comments.filter(c => c.id !== id); return {ok: true}; }, {message: 'Delete AN comment'}),
   /* many comments from one e-mail, saved as ONE commit: target 'an' = text comment, otherwise the id of a figure / meeting record */
   importComments: ({aid}, b) => tx(aid, st => {
@@ -731,6 +740,7 @@ const ROUTES = [
   R('PATCH', A_ + `\\/reviews\\/(?<id>${ID})$`, H.updateReview), R('DELETE', A_ + `\\/reviews\\/(?<id>${ID})$`, H.deleteReview),
   R('POST', A_ + `\\/reviews\\/(?<id>${ID})\\/resolve$`, H.resolveReview),
   R('POST', A_ + `\\/reviews\\/(?<id>${ID})\\/revise$`, H.reviseReview),
+  R('POST', A_ + '\\/delete-comments$', H.deleteAllComments),
   R('POST', A_ + '\\/an-comments$', H.createAnComment), R('PATCH', A_ + `\\/an-comments\\/(?<id>${ID})$`, H.updateAnComment), R('DELETE', A_ + `\\/an-comments\\/(?<id>${ID})$`, H.deleteAnComment),
   R('POST', A_ + `\\/an-comments\\/(?<id>${ID})\\/to-figure$`, H.anCommentToFigure),
   R('POST', A_ + `\\/an-comments\\/(?<id>${ID})\\/resolve$`, H.resolveAnComment), R('POST', A_ + `\\/an-comments\\/(?<id>${ID})\\/reopen$`, H.reopenAnComment),

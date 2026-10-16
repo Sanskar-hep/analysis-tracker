@@ -256,5 +256,31 @@
         setCtx(vid); await reload(); toast(`${nU} plot${nU === 1 ? '' : 's'} linked to figures, ${nL} AN location${nL === 1 ? '' : 's'} filled in${nC ? `, ${nC} comment${nC === 1 ? '' : 's'} attached to their figures` : ''}${skipped ? `, ${skipped} plot${skipped === 1 ? ' was' : 's were'} already recorded` : ''}.`, '', 7000);
       }});
   }
-  window.SCAN = {start, scan, findCaptions, CAP, _dbg: {pageImages, cropVectors, fingerprint, dist, toCanvas}};
+  /* ---------- link the comments you already have to the figures already recorded (no PDF needed) ---------- */
+  function linkComments(vid) {
+    const av = anv(vid); if (!av) { toast('Choose a published AN version first.', 'err'); return; }
+    const uses = S.usages.filter(u => u.type === 'note' && u.anvId === vid);
+    if (!uses.length) { toast('No figures are recorded for this version yet. Open the AN PDF and use Scan figures first, or add the figures.', 'err', 9000); return; }
+    const figs = [...new Set(uses.map(u => u.fig))].sort((a, b) => a.localeCompare(b, undefined, {numeric: true})).map(fig => ({fig, us: uses.filter(u => u.fig === fig)}));
+    const cs = S.anc.filter(c => c.source === 'an' && c.anvId === vid && !['methodology', 'general'].includes(c.kind));
+    if (!cs.length) { toast('There are no plain comments left to link: every comment of this version is already on a figure, or is a methodology / general comment.', '', 9000); return; }
+    const cand = commentCands(figs.map(f => ({fig: f.fig, page: null})), vid), guess = new Map();
+    cand.forEach((list, i) => list.forEach(x => guess.set(x.c.id, i)));
+    const opts = cur => `<option value="">— leave it as it is —</option>${figs.map(f => `<option value="F:${esc(f.fig)}" ${cur === 'F:' + f.fig ? 'selected' : ''}>Figure ${esc(f.fig)} — ${f.us.length > 1 ? 'whole figure' : 'this figure'}</option>${f.us.length > 1 ? f.us.map(u => `<option value="U:${u.id}" ${cur === 'U:' + u.id ? 'selected' : ''}>Figure ${esc(f.fig)} · ${esc(panelName(u))}</option>`).join('') : ''}`).join('')}`;
+    const pre = c => { if (!guess.has(c.id)) return ''; const f = figs[guess.get(c.id)], hit = f.us.length > 1 ? f.us.filter(u => u.panel && panelMatches(u.panel, c.text + ' ' + (c.location || ''))) : []; return hit.length === 1 ? 'U:' + hit[0].id : 'F:' + f.fig; };
+    const sorted = [...cs].sort((a, b) => (guess.has(b.id) ? 1 : 0) - (guess.has(a.id) ? 1 : 0) || a.created - b.created);
+    openModal({title: `Link comments to figures · ${anvLabel(av)}`, xl: true, submit: 'Link them',
+      sub: `${cs.length} comment${cs.length === 1 ? ' is' : 's are'} not on a figure yet; ${[...guess.keys()].filter(id => cs.some(c => c.id === id)).length} were matched from the figure number in the text. Check the proposals, change any, or choose a figure for the others. Comments left as they are stay where they are.`,
+      body: `<div class="scanlist">${sorted.map((c, k) => `<div class="card pad scanc"><div><b>${esc(whoStr(c))}</b> ${c.location ? `<span class="badge stage">${esc(c.location)}</span>` : ''} <span class="badge ${c.status === 'resolved' ? 'resolved' : 'pending'}">${c.status === 'resolved' ? 'resolved' : 'open'}</span> “${esc(c.text.length > 260 ? c.text.slice(0, 260) + '…' : c.text)}”</div>
+        <div class="meta" style="margin-top:6px">Link to: <select name="lk${k}">${opts(pre(c))}</select>${guess.has(c.id) ? ' <span class="badge resolved">matched from the text</span>' : ''}</div></div>`).join('')}</div>`,
+      onSubmit: async fd => {
+        let n = 0; const jobs = sorted.map((c, k) => ({c, v: fd.get('lk' + k)})).filter(x => x.v);
+        if (!jobs.length) throw new Error('Choose a figure for at least one comment.');
+        await batch(async () => { for (const {c, v} of jobs) {
+          const whole = v.startsWith('F:'), us = whole ? uses.filter(u => u.fig === v.slice(2)) : [uses.find(u => u.id === v.slice(2))]; if (!us[0]) continue;
+          await api('POST', aurl(`/an-comments/${c.id}/to-figure`), {usage_id: us[0].id, scope: whole && us.length > 1 ? 'figure' : 'panel'}); n++; } });
+        await reload(); toast(`${n} comment${n === 1 ? '' : 's'} linked to their figures.`);
+      }});
+  }
+  window.SCAN = {start, scan, linkComments, findCaptions, CAP, _dbg: {pageImages, cropVectors, fingerprint, dist, toCanvas}};
 })();
