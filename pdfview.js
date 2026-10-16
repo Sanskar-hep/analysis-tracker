@@ -70,7 +70,7 @@
     const placing = PDFV.placing ? (() => { const it = its.find(i => i.kind === PDFV.placing.kind && i.id === PDFV.placing.id); return it ? `<div class="banner draft"><span><b>Placing:</b> ${esc(it.label)} — “${esc(it.text.length > 90 ? it.text.slice(0, 90) + '…' : it.text)}”. Select the text, or switch to <b>Draw a box</b> for a figure or table.</span><span class="actions"><button class="btn sm" data-act="pdf" data-op="cancel">Cancel</button></span></div>` : ''; })() : '';
     return `${head}${saved}${warn}${placing}
       <div class="pdftools"><div class="modes"><button class="${PDFV.tool === 'text' ? 'on' : ''}" data-act="pdf" data-op="tool" data-id="text">Highlight text</button><button class="${PDFV.tool === 'box' ? 'on' : ''}" data-act="pdf" data-op="tool" data-id="box">Draw a box</button></div>
-        <span class="meta">${PDFV.doc.numPages} pages</span><span class="spacer"></span><button class="btn sm" data-act="pdf" data-op="zoomout">−</button><span class="meta">${Math.round(PDFV.zoom * 100)}%</span><button class="btn sm" data-act="pdf" data-op="zoomin">+</button></div>
+        <button class="btn sm" data-act="pdf" data-op="scan" title="Find every figure caption, and match the figures to the plots you uploaded">Scan figures</button><span class="meta">${PDFV.doc.numPages} pages</span><span class="spacer"></span><button class="btn sm" data-act="pdf" data-op="zoomout">−</button><span class="meta">${Math.round(PDFV.zoom * 100)}%</span><button class="btn sm" data-act="pdf" data-op="zoomin">+</button></div>
       <div class="pdfwrap"><div id="pdfpane" class="pdfpane ${PDFV.tool === 'box' ? 'tool-box' : ''}"></div>
         <aside class="pdfside"><div class="sechead" style="margin-top:0"><h2>To place <span class="count">${todo.length}</span></h2></div>${todo.map(i => sideItem(i, false)).join('') || '<div class="meta" style="margin-bottom:12px">All comments are placed.</div>'}
         <div class="sechead"><h2>Placed <span class="count">${done.length}</span></h2></div>${done.map(i => sideItem(i, true)).join('') || '<div class="meta">Nothing placed yet.</div>'}</aside></div>`;
@@ -248,6 +248,7 @@
     else if (op === 'zoomin' || op === 'zoomout') { PDFV.zoom = Math.max(0.5, Math.min(3, PDFV.zoom + (op === 'zoomin' ? 0.25 : -0.25))); render(); }
     else if (op === 'place') { PDFV.placing = {kind, id}; render(); }
     else if (op === 'cancel') { PDFV.placing = null; render(); }
+    else if (op === 'scan') SCAN.start();
     else if (op === 'goto') jumpTo(kind, id);
     else if (op === 'unplace') { await api('POST', aurl(`/${kind === 'anc' ? 'an-comments' : 'reviews'}/${id}/anchor`), {anchor: null}); await reload(); }
     else if (op === 'store') {
