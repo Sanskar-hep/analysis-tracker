@@ -176,6 +176,21 @@
     } finally { done(); }
   }
 
+  /* ---------- comments that talk about a figure ---------- */
+  const figRe = /\bfig(?:ure)?s?\.?\s*((?:[A-Z]\.)?\d+(?:\.\d+)*)/gi, normN = s => String(s).toLowerCase().replace(/[a-z]$/, '');
+  /* AN comments still recorded as plain text, matched to the figure they mention (or, if placed in the PDF, the figure on that page) */
+  function commentCands(figures, vid) {
+    const byNum = new Map(); figures.forEach((f, i) => { if (!byNum.has(normN(f.fig))) byNum.set(normN(f.fig), i); });
+    const out = new Map();
+    S.anc.filter(c => c.source === 'an' && c.anvId === vid).forEach(c => {
+      const nums = [...`${c.location || ''} ${c.text}`.matchAll(figRe)].map(m => normN(m[1])).filter(n => byNum.has(n));
+      let i = nums.length ? byNum.get(nums[0]) : null; const also = [...new Set(nums.slice(1).filter(n => byNum.get(n) !== i))];
+      if (i === null && c.anchor && c.kind === 'figure') { const k = figures.findIndex(f => f.page === c.anchor.page); if (k >= 0) i = k; }
+      if (i === null) return; if (!out.has(i)) out.set(i, []); out.get(i).push({c, also});
+    });
+    return out;
+  }
+
   /* ---------- review and apply ---------- */
   async function start() {
     const doc = PDF.state.doc, vid = PDF.state.vid; if (!doc || !vid) { toast('Open the AN PDF first.', 'err'); return; }
@@ -186,7 +201,7 @@
   function review(res, vid) {
     const av = anv(vid), plots = S.plots.filter(p => versionAt(p.id, av.number)).sort((a, b) => a.name.localeCompare(b.name, undefined, {numeric: true}));
     const popts = cur => `<option value="">— no plot —</option>${plots.map(p => `<option value="${p.id}" ${p.id === cur ? 'selected' : ''}>${esc(catPath(p.catId) ? catPath(p.catId) + ' / ' : '')}${esc(p.name)}</option>`).join('')}`;
-    const has = S.usages.filter(u => u.type === 'note' && u.anvId === vid);
+    const has = S.usages.filter(u => u.type === 'note' && u.anvId === vid), cands = commentCands(res.figures, vid), nC0 = [...cands.values()].reduce((n, a) => n + a.length, 0);
     const matched = res.figures.filter(f => f.rows.some(r => r.plotId)).length;
     const mineHtml = pid => { const v = pid && versionAt(pid, av.number); return v ? `${img(v)}<span class="meta">your plot</span>` : '<span class="meta">no plot chosen</span>'; };
     const card = (f, i) => { const exists = has.some(u => u.fig === f.fig), conf = f.rows.some(r => r.conf === 'high') ? 'high' : f.rows.some(r => r.plotId) ? 'check' : 'none';
@@ -198,9 +213,12 @@
           <div class="sth mine" title="Your uploaded plot: click to enlarge">${mineHtml(r.plotId)}</div>
           <div><select name="p${i}_${j}">${popts(r.plotId)}</select><a class="link opn" target="_blank" rel="noopener" ${r.plotId ? `href="${L('/plot/' + r.plotId)}"` : 'hidden'}>Open the plot page ↗</a></div><div><input type="text" name="l${i}_${j}" maxlength="60" value="${esc(r.plotId ? (GAL.plotEra(plot(r.plotId)) || (f.rows.length > 1 ? plot(r.plotId).name : '')) : '')}" placeholder="panel / era"></div><span class="badge ${r.conf === 'high' ? 'resolved' : r.conf === 'medium' ? '' : 'pending'}">${r.via === 'image' ? 'image ' + (r.conf) : r.conf ? 'name only' : 'unmatched picture'}</span></div>`).join('')
           : `<div class="scanrow"><span class="meta">${f.nImg ? '' : 'No picture found (a vector figure?). '}Pick a plot if you want to link one:</span><select name="p${i}_0">${popts('')}</select><input type="text" name="l${i}_0" maxlength="60" placeholder="panel / era"></div>`}
+        ${(cands.get(i) || []).map((x, k) => { const rows = f.rows.map((r, j) => ({r, j, lab: r.plotId ? (GAL.plotEra(plot(r.plotId)) || plot(r.plotId).name) : ''})).filter(x2 => x2.r.plotId), hit = rows.filter(x2 => x2.lab && panelMatches(x2.lab, x.c.text + ' ' + (x.c.location || '')));
+          return `<div class="scanc"><label><input type="checkbox" name="cm${i}_${k}" checked> <b>${esc(whoStr(x.c))}</b> <span class="badge ${x.c.status === 'resolved' ? 'resolved' : 'pending'}">${x.c.status === 'resolved' ? 'resolved' : 'open'}</span> “${esc(x.c.text.length > 200 ? x.c.text.slice(0, 200) + '…' : x.c.text)}”${x.also.length ? ` <span class="meta">(also mentions Fig ${esc(x.also.join(', '))})</span>` : ''}</label>
+            <div class="meta" style="margin:2px 0 0 22px">Attach to: <select name="ct${i}_${k}"><option value="figure" ${hit.length === 1 ? '' : 'selected'}>the whole figure</option>${rows.map(x2 => `<option value="p${x2.j}" ${hit.length === 1 && hit[0].j === x2.j ? 'selected' : ''}>${esc(x2.lab)} panel</option>`).join('')}</select></div></div>`; }).join('')}
         </div></div></div>`; };
     openModal({title: `Figures found in ${anvLabel(av)}`, xl: true, submit: 'Record the checked figures',
-      sub: `${res.figures.length} figure${res.figures.length === 1 ? '' : 's'} found; ${matched} matched to your plots (${res.refs} plots were compared). Nothing is saved until you confirm. Untick a figure to skip it, and fix any wrong plot in the lists.`,
+      sub: `${res.figures.length} figure${res.figures.length === 1 ? '' : 's'} found; ${matched} matched to your plots (${res.refs} plots were compared)${nC0 ? `; ${nC0} comment${nC0 === 1 ? '' : 's'} mention these figures and can be attached to them` : ''}. Nothing is saved until you confirm. Untick a figure to skip it, and fix any wrong plot in the lists.`,
       body: `<div class="scanlist">${res.figures.map(card).join('')}</div>`,
       setup: f => {
         hydrateImages();
@@ -211,20 +229,31 @@
       },
       onSubmit: async (fd, f) => {
         const jobs = []; res.figures.forEach((fg, i) => { if (!fd.get('use' + i)) return; const sel = [];
-          for (let j = 0; fd.has(`p${i}_${j}`); j++) { const pid = fd.get(`p${i}_${j}`); if (pid) sel.push({pid, label: (fd.get(`l${i}_${j}`) || '').trim()}); }
+          for (let j = 0; fd.has(`p${i}_${j}`); j++) { const pid = fd.get(`p${i}_${j}`); if (pid) sel.push({pid, j, label: (fd.get(`l${i}_${j}`) || '').trim()}); }
           if (sel.length > 1 && sel.some(s => !s.label)) throw new Error(`Figure ${fg.fig}: give each plot a panel label (its era).`);
-          if (sel.length) jobs.push({fg, sel}); });
-        if (!jobs.length) throw new Error('Nothing to record: tick a figure that has a plot.');
-        let nU = 0, nL = 0, skipped = 0;
+          if (sel.length) jobs.push({fg, i, sel}); });
+        const anyC = [...cands.entries()].some(([i, a]) => a.some((x, k) => fd.get(`cm${i}_${k}`)));
+        if (!jobs.length && !anyC) throw new Error('Nothing to record: tick a figure that has a plot, or a comment to attach.');
+        let nU = 0, nL = 0, nC = 0, skipped = 0; const uid = {};
         await batch(async () => {
-          for (const {fg, sel} of jobs) for (const s of sel) {
+          for (const {fg, i, sel} of jobs) for (const s of sel) {
             const v = versionAt(s.pid, av.number); if (!v) { skipped++; continue; }
-            if (S.usages.some(u => u.type === 'note' && u.anvId === vid && u.fig === fg.fig && u.versionId && ver(u.versionId).plotId === s.pid)) { skipped++; continue; }
-            await api('POST', aurl('/usages'), {plot_version_id: v.id, type: 'note', an_version_id: vid, fig: fg.fig, panel: s.label, an_ver: ''}); nU++;
+            const old = S.usages.find(u => u.type === 'note' && u.anvId === vid && u.fig === fg.fig && u.versionId && ver(u.versionId).plotId === s.pid);
+            if (old) { uid[i + '_' + s.j] = old.id; skipped++; continue; }
+            uid[i + '_' + s.j] = (await api('POST', aurl('/usages'), {plot_version_id: v.id, type: 'note', an_version_id: vid, fig: fg.fig, panel: s.label, an_ver: ''})).id; nU++;
             const p = plot(s.pid); if (!p.location) { await api('PATCH', aurl('/plots/' + s.pid), {location: `Fig ${fg.fig} · p. ${fg.label}${fg.section ? ' · ' + fg.section.slice(0, 60) : ''}`}); nL++; }
           }
+          for (const [i, list] of cands) for (let k = 0; k < list.length; k++) {
+            if (!fd.get(`cm${i}_${k}`)) continue; const t = fd.get(`ct${i}_${k}`) || 'figure', whole = t === 'figure', fgn = res.figures[i].fig;
+            const existing = pid => (S.usages.find(u => u.type === 'note' && u.anvId === vid && u.fig === fgn && u.versionId && ver(u.versionId).plotId === pid) || {}).id;
+            let usage;                                                      // the figure record this comment goes onto: one just made, or one that was already there
+            if (whole) usage = Object.keys(uid).filter(x => x.startsWith(i + '_')).map(x => uid[x])[0] || (S.usages.find(u => u.type === 'note' && u.anvId === vid && u.fig === fgn) || {}).id;
+            else usage = uid[i + '_' + t.slice(1)] || existing(fd.get(`p${i}_${t.slice(1)}`));
+            if (!usage) continue;
+            await api('POST', aurl(`/an-comments/${list[k].c.id}/to-figure`), {usage_id: usage, scope: whole ? 'figure' : 'panel'}); nC++;
+          }
         });
-        setCtx(vid); await reload(); toast(`${nU} plot${nU === 1 ? '' : 's'} linked to figures, ${nL} AN location${nL === 1 ? '' : 's'} filled in${skipped ? `, ${skipped} skipped (already recorded)` : ''}.`, '', 7000);
+        setCtx(vid); await reload(); toast(`${nU} plot${nU === 1 ? '' : 's'} linked to figures, ${nL} AN location${nL === 1 ? '' : 's'} filled in${nC ? `, ${nC} comment${nC === 1 ? '' : 's'} attached to their figures` : ''}${skipped ? `, ${skipped} plot${skipped === 1 ? ' was' : 's were'} already recorded` : ''}.`, '', 7000);
       }});
   }
   window.SCAN = {start, scan, findCaptions, CAP, _dbg: {pageImages, cropVectors, fingerprint, dist, toCanvas}};

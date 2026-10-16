@@ -589,6 +589,16 @@ const H = {
     Object.assign(c, {status: 'resolved', resolution: note, resolved_in: rin, resolved_at: now()}); return {ok: true};
   }, {message: 'Resolve AN comment'}),
   reopenAnComment: ({aid, id}) => tx(aid, st => { Object.assign(byId(st.an_comments, id, 'Comment'), {status: 'pending', resolution: '', resolved_in: null, resolved_at: null}); return {ok: true}; }, {message: 'Reopen AN comment'}),
+  /* a comment that was recorded as plain AN text turns out to be about a figure: move it onto that figure (nothing is lost) */
+  anCommentToFigure: ({aid, id}, b) => tx(aid, st => {
+    const c = byId(st.an_comments, id, 'Comment'), u = byId(st.usages, sv(b, 'usage_id', 40, true), 'Record');
+    if (c.source !== 'an') throw E(400, 'Only comments on the AN can be moved onto a figure');
+    if (u.type !== 'note' || (u.an_version_id || null) !== (c.an_version_id || null)) throw E(400, 'That figure belongs to a different AN version');
+    const loc = c.location || '';
+    u.reviews.push({id: nid(), analysis_id: st.analysis.id, usage_id: u.id, role: c.role, name: c.name, none: false, text: loc && !/^fig/i.test(loc) ? `${loc}: ${c.text}` : c.text, answer: c.answer || '', anchor: c.anchor || null,
+      scope: b.scope === 'figure' ? 'figure' : 'panel', resolved_more: [], status: c.status || 'pending', resolved_version_id: null, resolution: c.resolution || '', resolved_at: c.resolved_at || null, created: c.created});
+    st.an_comments = st.an_comments.filter(x => x.id !== c.id); return {ok: true};
+  }, {message: 'Attach comment to a figure'}),
   deleteAnComment: ({aid, id}) => tx(aid, st => { byId(st.an_comments, id, 'Comment'); st.an_comments = st.an_comments.filter(c => c.id !== id); return {ok: true}; }, {message: 'Delete AN comment'}),
   /* many comments from one e-mail, saved as ONE commit: target 'an' = text comment, otherwise the id of a figure / meeting record */
   importComments: ({aid}, b) => tx(aid, st => {
@@ -722,6 +732,7 @@ const ROUTES = [
   R('POST', A_ + `\\/reviews\\/(?<id>${ID})\\/resolve$`, H.resolveReview),
   R('POST', A_ + `\\/reviews\\/(?<id>${ID})\\/revise$`, H.reviseReview),
   R('POST', A_ + '\\/an-comments$', H.createAnComment), R('PATCH', A_ + `\\/an-comments\\/(?<id>${ID})$`, H.updateAnComment), R('DELETE', A_ + `\\/an-comments\\/(?<id>${ID})$`, H.deleteAnComment),
+  R('POST', A_ + `\\/an-comments\\/(?<id>${ID})\\/to-figure$`, H.anCommentToFigure),
   R('POST', A_ + `\\/an-comments\\/(?<id>${ID})\\/resolve$`, H.resolveAnComment), R('POST', A_ + `\\/an-comments\\/(?<id>${ID})\\/reopen$`, H.reopenAnComment),
   R('POST', A_ + '\\/import-comments$', H.importComments), R('POST', A_ + '\\/presented$', H.setPresented),
   R('POST', A_ + `\\/an-comments\\/(?<id>${ID})\\/answer$`, H.answerAnComment), R('POST', A_ + `\\/an-comments\\/(?<id>${ID})\\/anchor$`, H.anchorAnComment),
