@@ -169,6 +169,8 @@
     out.push({name: `${plan.root}/Review_Comments/Comments_and_Responses.md`, data: enc.encode(commentsMd())});
     out.push({name: `${plan.root}/Review_Comments/Change_Summary.md`, data: enc.encode(effectiveSummary())});
     out.push({name: `${plan.root}/Plot_Inventory.csv`, data: enc.encode(csv([['Plot', 'Category path', 'Location in the AN', 'File in this package', 'Version used', 'Status vs previous release', 'Original file name', 'Latest recorded change'], ...plan.rows]))});
+    const wp = wpdf(); if (wp) { const u = await fetchImage(S.an.id, wp.file_id, wp.ext || '.pdf'); out.push({name: `${plan.root}/${safe(wp.name.replace(/\.pdf$/i, ''))}.pdf`, data: new Uint8Array(await (await fetch(u)).arrayBuffer())}); }
+    if (S.work && S.work.change_report) out.push({name: `${plan.root}/Review_Comments/Changes_between_AN_versions.md`, data: enc.encode(S.work.change_report)});
     out.push({name: `${plan.root}/manifest.json`, data: enc.encode(JSON.stringify(manifest(plan), null, 2))});
     return {blob: zipBlob(out), plan, count: out.length};
   }
@@ -181,6 +183,41 @@
     } catch (e) { toast('Could not build the package: ' + e.message, 'err', 9000); } finally { done(); }
   }
 
+  /* ---------------- the new AN PDF of the working version (required once an earlier version exists) ---------------- */
+  const needsPdf = () => !!lastRelease();
+  const wpdf = () => (S.work && S.work.pdf && S.work.pdf.file_id) ? S.work.pdf : null;
+  const pdfProblem = () => {                                     // why the release is still blocked, or ''
+    if (!needsPdf()) return '';
+    const w = wpdf(); if (!w) return `Upload the new AN PDF (the LaTeX document, saved as PDF after the plots were updated) to release ${workingName()}.`;
+    if (S.anv.some(v => v.pdf && v.pdf.sha256 === w.sha256)) return 'This PDF is identical to the PDF of a published version. Upload the updated AN PDF.';
+    return '';
+  };
+  const canRelease = () => !pdfProblem();
+  const mb = n => (n / 1048576).toFixed(1) + ' MB';
+  function pdfCard() {
+    const w = wpdf(), prob = pdfProblem(), last = lastRelease();
+    if (!needsPdf() && !w) return `<div class="card pad"><b>AN PDF</b> <span class="meta">(optional for the first version)</span><div class="meta" style="margin:4px 0 8px">You can attach the PDF of this first version when you publish it.</div></div>`;
+    return `<div class="card pad ready" style="margin-bottom:14px"><div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center"><div style="flex:1;min-width:240px"><b>New AN PDF for ${esc(workingName())}</b> ${w ? (prob ? '<span class="badge pending">needs a different file</span>' : '<span class="badge resolved">uploaded</span>') : '<span class="badge pending">required</span>'}
+      <div class="meta" style="margin-top:4px">${w ? `${esc(w.name)} · ${mb(w.size)} · uploaded ${w.uploaded ? fmtDate(w.uploaded) : ''}${w.by ? ' by ' + esc(w.by) : ''}` : `The LaTeX document, downloaded as PDF after you updated the plots and answered the comments. ${last ? `Publishing ${esc(workingName())} and downloading the package are locked until it is uploaded.` : ''}`}</div>
+      ${prob ? `<div class="meta" style="color:var(--pending);margin-top:4px">${esc(prob)}</div>` : ''}</div>
+      <div class="actions"><label class="btn ${w ? '' : 'primary'}" style="cursor:pointer">${w ? 'Replace the PDF' : 'Upload the new AN PDF…'}<input id="wpdf" type="file" accept="application/pdf,.pdf" hidden></label>
+      ${w && last ? `<button class="btn" data-act="anc" data-op="open" data-a="${last.id}" data-b="work">Compare with ${anvLabel(last)}</button>` : ''}${w ? '<button class="btn" data-act="rel" data-op="pdf-remove">Remove</button>' : ''}</div></div></div>`;
+  }
+  document.addEventListener('change', async e => {
+    const f = e.target; if (!f || f.id !== 'wpdf' || !f.files || !f.files[0]) return;
+    const file = f.files[0]; f.value = '';
+    if (file.size > 50 * 1048576) { toast('This PDF is larger than 50 MB, so it cannot be stored in the repository. Reduce its size and try again.', 'err', 9000); return; }
+    const done = busy('Checking the PDF…');
+    try {
+      const fp = await pdfFingerprint(file), same = S.anv.find(v => v.pdf && v.pdf.sha256 === fp.sha256);
+      if (same) { toast(`This file is identical to the PDF of ${anvLabel(same)}. Upload the updated AN PDF.`, 'err', 9000); return; }
+      done.set('Storing the PDF in the repository…');
+      const up = await api('POST', aurl('/upload'), undefined, {raw: file});
+      await api('POST', aurl('/working/pdf'), {file_id: up.file_id, pdf: fp});
+      await reload(); toast(`AN PDF uploaded: ${file.name}`, '', 6000);
+    } catch (err) { toast(err.message, 'err', 9000); } finally { done(); }
+  });
+
   /* ---------------- readiness: what still needs the analyst's attention (reminders, never an approval) ---------------- */
   function readiness() {
     const inv = inventory(), cs = counts(inv), items = [];
@@ -189,6 +226,7 @@
     const unanswered = comments.filter(c => isOpen(c) && !(c.answer || '').trim()).length;
     const needRev = inv.filter(x => x.status === 'updated' && !x.latest.reviewed), noWhy = inv.flatMap(x => x.newer).filter(v => v.review_id && (!(v.motivation || '').trim() || /^Response to /.test(v.motivation)));
     const inc = GAL.buildGroups(S.plots.filter(p => verOf(p.id).length || true)).filter(GAL.incomplete);
+    if (needsPdf()) items.unshift({level: pdfProblem() ? 'warn' : 'ok', text: pdfProblem() ? 'The new AN PDF has not been uploaded (publishing and the package are locked)' : 'The new AN PDF is uploaded', href: '#wpdfcard', go: ''});
     items.push({level: open + prog ? 'warn' : 'ok', text: `Comments: <b>${open}</b> open · <b>${prog}</b> in progress · <b>${done}</b> resolved`, href: L('/pending'), go: 'Open comments'});
     if (unanswered) items.push({level: 'warn', text: `<b>${unanswered}</b> unresolved comment${unanswered === 1 ? ' has' : 's have'} no response yet`, href: L('/pending'), go: 'Write responses'});
     items.push({level: 'info', text: `Plots: <b>${cs.updated}</b> updated · <b>${cs.added}</b> new · ${cs.unchanged} unchanged`, op: 'gal-filter', fid: 'updated', go: 'Show updated plots'});
@@ -210,7 +248,7 @@
     S.anc.forEach(c => comments.push({id: c.id, type: c.kind, source: whoStr(c), text: c.text, status: c.status, response: (c.answer || '').trim(), response_with_revision_reasons: (c.answer || '').trim(), action_taken: c.resolution || '', plot_ids: [], location: c.location || '', an_version: c.anvId ? anv(c.anvId).number : null, meeting: c.source === 'meeting' ? c.meeting : null}));
     const last = lastRelease(), by = id => comments.filter(c => c.plot_ids.includes(id)).map(c => c.id);
     return {format: 'analysis-tracker-manifest', format_version: 1, generated: new Date().toISOString(), analysis: {id: S.an.id, title: S.an.title, an_name: S.an.an_name || '', collaboration: S.an.collaboration || ''},
-      working_version: workingName(), previous_release: last ? {number: last.number, published_on: last.published_on} : null, change_summary_reviewed: !!(S.work && S.work.summary_reviewed),
+      working_version: workingName(), an_pdf: wpdf() ? {name: wpdf().name, size: wpdf().size, sha256: wpdf().sha256} : null, previous_release: last ? {number: last.number, published_on: last.published_on} : null, change_summary_reviewed: !!(S.work && S.work.summary_reviewed),
       plots: plan.files.map(f => { const x = f.x, v = x.latest; return {plot_id: x.p.id, name: x.p.name, group: GAL.plotBase(x.p), era: GAL.plotEra(x.p) || null, file: f.path.slice(plan.root.length + 1), original_file_name: v.fileName,
         category_id: x.p.catId, category_path: catChain(x.p.catId).map(c => c.name), category_ids: catChain(x.p.catId).map(c => c.id), location_in_an: x.p.location || null, status_vs_previous_release: x.status,
         released_version_id: x.rel ? x.rel.id : null, released_label: x.rel ? verLabel(x.rel) : null,
@@ -225,13 +263,15 @@
     const lines = [plan.root + '/']; const keys = [...dirs.keys()].filter(k => k !== plan.root).sort();
     (dirs.get(plan.root) || []).forEach(f => lines.push('  ' + f));
     keys.forEach(k => { const depth = k.split('/').length - 1; lines.push('  '.repeat(depth) + k.split('/').pop() + '/'); dirs.get(k).forEach(f => lines.push('  '.repeat(depth + 1) + f)); });
-    lines.push('  Review_Comments/', '    Comments_and_Responses.md', '    Change_Summary.md', '  Plot_Inventory.csv', '  manifest.json'); return lines.join('\n');
+    lines.push(...(wpdf() ? ['  ' + safe(wpdf().name.replace(/\.pdf$/i, '')) + '.pdf'] : []), '  Review_Comments/', '    Comments_and_Responses.md', '    Change_Summary.md', ...(S.work && S.work.change_report ? ['    Changes_between_AN_versions.md'] : []), '  Plot_Inventory.csv', '  manifest.json'); return lines.join('\n');
   };
   const chip = s => `<span class="badge s-${s}">${s === 'new' ? 'New' : s === 'updated' ? 'Updated' : 'Unchanged'}</span>`;
   function view() {
     if (!isAN()) return notFound();
     const inv = inventory(), cs = counts(inv), sm = summary(), name = workingName(), last = lastRelease(), f = ui.relf || 'all', plan = packagePlan();
-    const open = allPending().length, edited = !!(S.work && S.work.summary_md);
+    const open = allPending().length, edited = !!(S.work && S.work.summary_md), block = pdfProblem();
+    const dlBtn = (t, c) => block ? `<button class="btn ${c}" disabled title="${esc(block)}">${esc(t)}</button>` : `<button class="btn ${c}" data-act="rel" data-op="download">${esc(t)}</button>`;
+    const pubBtn = block ? `<button class="btn primary" disabled title="${esc(block)}">Publish ${esc('AN v' + suggestedNumber())}</button>` : `<button class="btn primary" data-act="publish">Publish ${esc('AN v' + suggestedNumber())}</button>`;
     const rows = inv.filter(x => f === 'all' || x.status === f);
     let curPath = null; const table = rows.map(x => {
       const head = x.path !== curPath ? `<tr class="grp"><td colspan="6">${esc(x.path || '(no category)')}</td></tr>` : ''; curPath = x.path;
@@ -242,7 +282,8 @@
     const secHtml = sm.sections.map((s, i) => `<div class="sumsec"><h3>${i + 1}. ${esc(s.title)} <span class="count">${s.items.length}</span></h3>${s.items.length ? `<ul>${s.items.map(it => `<li><span class="badge ${it.auto ? '' : 'stage'}">${it.auto ? 'auto' : 'analyst'}</span> ${esc(it.text)}${it.id ? ` <button class="iconbtn" data-act="rel" data-op="del-entry" data-id="${it.id}" title="Remove">🗑</button>` : ''}</li>`).join('')}</ul>` : '<div class="meta">None.</div>'}</div>`).join('');
     return `${banner()}<div class="crumbs"><a href="${L('')}">Overview</a> / Release &amp; Export</div>
       <div class="pagehead"><div><h1>Release &amp; Export · ${esc(name)}</h1><p>The working version always holds each plot at its newest version, compared with ${last ? anvLabel(last) : 'no earlier release'}. Released AN versions are never changed, and older plot versions stay in each plot's history.</p></div>
-      <div class="actions"><button class="btn" data-act="rel" data-op="rename">Rename</button><button class="btn" data-act="rel" data-op="download">Download ZIP</button><button class="btn primary" data-act="publish">Publish ${esc('AN v' + suggestedNumber())}</button></div></div>
+      <div class="actions"><button class="btn" data-act="rel" data-op="rename">Rename</button>${dlBtn('Download ZIP', '')}${pubBtn}</div></div>
+      <div id="wpdfcard">${pdfCard()}</div>
       ${readyHtml(readiness())}
       <div class="tiles"><div class="card tile"><b>${cs.total}</b><span>Plots in this version</span></div><div class="card tile ${cs.updated ? 'warn' : ''}"><b>${cs.updated}</b><span>Updated</span></div><div class="card tile"><b>${cs.added}</b><span>New</span></div><div class="card tile"><b>${cs.unchanged}</b><span>Unchanged</span></div><div class="card tile ${open ? 'warn' : ''}"><b>${open}</b><span>Comments still open</span></div></div>
       <div class="sechead"><h2>Plots in ${esc(name)}</h2><div class="chips">${[['all', 'All'], ['updated', 'Updated'], ['new', 'New'], ['unchanged', 'Unchanged']].map(([k, l]) => `<span class="chip ${f === k ? 'on' : ''}" data-act="rel" data-op="filter" data-id="${k}">${l}</span>`).join('')}</div></div>
@@ -254,7 +295,7 @@
       <label id="sumbox" class="chk" style="margin:10px 2px"><input type="checkbox" data-act="rel" data-op="sumrev" ${S.work && S.work.summary_reviewed ? 'checked' : ''}> I have read and reviewed this change summary</label>
       <div class="sechead"><h2>Download</h2></div>
       <div class="card pad"><p style="margin-top:0">One ZIP with <b>all ${cs.total} plots</b> (changed or not) in the category and subcategory folders, plus the review history and this summary. Extracting it recreates the folders on your computer.</p><pre class="mdpre">${esc(treePreview(plan))}</pre>
-        <button class="btn primary" data-act="rel" data-op="download">Download ${esc(plan.root)}.zip</button> <span class="meta">Comments still open: ${open}${open ? ' (they are listed under “Still Open”)' : ''}</span></div>`;
+        ${dlBtn('Download ' + plan.root + '.zip', 'primary')} <span class="meta">Comments still open: ${open}${open ? ' (they are listed under “Still Open”)' : ''}</span></div>`;
   }
 
   function entryModal() {
@@ -279,13 +320,14 @@
   function showVersionSummary(vid) {
     const v = anv(vid); if (!v) return;
     openModal({title: `Change summary · ${anvLabel(v)}`, xl: true, submit: 'Copy',
-      body: `<pre class="mdpre" id="vsum">${esc(v.change_summary || 'No change summary was saved with this version.')}</pre>`,
+      body: `<pre class="mdpre" id="vsum">${esc((v.change_summary || 'No change summary was saved with this version.') + (v.change_report ? '\n\n---\n\n' + v.change_report : ''))}</pre>`,
       onSubmit: async () => { try { await navigator.clipboard.writeText(v.change_summary || ''); toast('Copied'); } catch { toast('Select the text and press Ctrl+C', '', 4000); return false; } }});
   }
 
   async function act(el) {
     const op = el.dataset.op;
-    if (op === 'download') return download();
+    if (op === 'download') { if (pdfProblem()) return toast(pdfProblem(), 'err', 8000); return download(); }
+    if (op === 'pdf-remove') { await api('DELETE', aurl('/working/pdf')); return reload(); }
     if (op === 'rename') return renameModal();
     if (op === 'add-entry') return entryModal();
     if (op === 'edit-summary') return summaryModal();
@@ -300,5 +342,5 @@
     const cs = counts(inventory()), r = readiness();
     return `<div class="card pad guide"><div><b>Release · ${esc(workingName())}</b><div class="meta">${cs.total} plot${cs.total === 1 ? '' : 's'}: ${cs.updated} updated · ${cs.added} new · ${cs.unchanged} unchanged.${r.warn.length ? ` <b>${r.warn.length} thing${r.warn.length === 1 ? '' : 's'} still need${r.warn.length === 1 ? 's' : ''} your attention.</b>` : ' Nothing is waiting for you.'}</div></div><div class="actions"><a class="btn primary" href="${L('/release')}">Release &amp; Export</a></div></div>`;
   }
-  window.REL = {view, act, dashCard, readiness, warnHtml, manifest, effectiveSummary, suggestedNumber, workingName, showVersionSummary, commentsMd, summary, inventory, build, zipBlob};
+  window.REL = {pdfProblem, canRelease, view, act, dashCard, readiness, warnHtml, manifest, effectiveSummary, suggestedNumber, workingName, showVersionSummary, commentsMd, summary, inventory, build, zipBlob};
 })();

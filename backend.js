@@ -97,6 +97,8 @@ function migrate(st) {                                    // older files get the
   st.plots.forEach(p => { p.location = p.location || ''; p.era = p.era || ''; });
   st.plot_versions.forEach(v => { v.reviewed = !!v.reviewed; });
   st.working = st.working || {name: '', entries: [], summary_md: null, summary_reviewed: false};
+  if (st.working.pdf === undefined) st.working.pdf = null; st.working.change_report = st.working.change_report || '';
+  st.an_versions.forEach(v => { v.change_report = v.change_report || ''; });
   if (st.analysis && st.analysis.presented === undefined) st.analysis.presented = false;
   return st;
 }
@@ -354,6 +356,7 @@ const H = {
     const w = st.working; if (b.name !== undefined) w.name = sv(b, 'name', 60);
     if (b.summary_md !== undefined) w.summary_md = b.summary_md === null ? null : sv(b, 'summary_md', 60000);
     if (b.summary_reviewed !== undefined) w.summary_reviewed = !!b.summary_reviewed;
+    if (b.change_report !== undefined) w.change_report = sv(b, 'change_report', 120000);
     return {ok: true};
   }, {message: 'Update working version'}),
   addWorkingEntry: ({aid}, b) => tx(aid, st => {
@@ -361,6 +364,20 @@ const H = {
     const e = {id: nid(), section, text: sv(b, 'text', 3000, true), author: ME().name, created: now()}; st.working.entries.push(e); return {id: e.id};
   }, {message: 'Record a change'}),
   deleteWorkingEntry: ({aid, id}) => tx(aid, st => { byId(st.working.entries, id, 'Entry'); st.working.entries = st.working.entries.filter(e => e.id !== id); return {ok: true}; }, {message: 'Remove a recorded change'}),
+  /* the new AN PDF of the working version: it must be uploaded before the version can be published or exported */
+  setWorkingPdf: ({aid}, b) => tx(aid, (st, io) => {
+    const info = pdfInfo(b.pdf), fid = sv(b, 'file_id', 40, true), up = PENDING.get(fid), w = st.working;
+    if (!info) throw E(400, 'PDF details are missing');
+    if (!up || up.aid !== st.analysis.id || up.ext !== '.pdf') throw E(400, 'Upload the PDF first');
+    if (st.files.some(f => f.id === fid)) throw E(400, 'That upload was already used');
+    if (st.an_versions.some(v => v.pdf && v.pdf.sha256 === info.sha256)) throw E(400, 'This PDF is identical to the PDF of a published AN version. Upload the updated AN PDF.');
+    if (w.pdf && w.pdf.file_id) dropStoredPdf(st, io, w.pdf);
+    st.files.push({id: fid, ext: '.pdf', size: up.blob.size, created: now()}); io.newFiles.push(fid);
+    w.pdf = {...info, file_id: fid, ext: '.pdf', uploaded: now(), by: ME().name}; return {ok: true};
+  }, {message: 'Upload the new AN PDF'}),
+  removeWorkingPdf: ({aid}) => tx(aid, (st, io) => { const w = st.working; if (w.pdf && w.pdf.file_id) dropStoredPdf(st, io, w.pdf); w.pdf = null; return {ok: true}; }, {message: 'Remove the new AN PDF'}),
+  /* the documented changes between two successive AN versions (text and figures), kept with the later version */
+  setVersionChanges: ({aid, id}, b) => tx(aid, st => { byId(st.an_versions, id, 'Version').change_report = sv(b, 'report', 120000); return {ok: true}; }, {message: 'Save the changes between AN versions'}),
   /* ---- AN versions ---- */
   publish: ({aid}, b) => tx(aid, st => {
     const a = st.analysis; if (a.stage !== 'an_stage') throw E(400, 'Only analyses at the AN stage can publish AN versions');
@@ -369,9 +386,15 @@ const H = {
     if (!Number.isInteger(num) || num < 1) throw E(400, 'Version number must be a positive integer');
     if (st.an_versions.some(v => v.number === num)) throw E(409, `Version ${num} already exists`);
     const pub = dateOk(sv(b, 'published_on', 10, false, todayStr()), 'published_on'), notes = sv(b, 'notes', 2000);
+    let pdf = pdfInfo(b.pdf);
+    if (st.an_versions.length && !b.skip_pdf_check) {                 // every later version needs its own, new AN PDF
+      const wp = st.working.pdf; if (!wp || !wp.file_id) throw E(400, 'Upload the new AN PDF (Release & Export) before publishing');
+      if (st.an_versions.some(v => v.pdf && v.pdf.sha256 === wp.sha256)) throw E(400, 'The new AN PDF is identical to the PDF of an earlier version');
+      pdf = wp;
+    }
     const prev = [...st.an_versions].filter(v => v.number < num).sort((x, y) => y.number - x.number)[0], vid = nid();
-    st.an_versions.push({id: vid, analysis_id: a.id, number: num, published_on: pub, notes, pdf: pdfInfo(b.pdf), change_summary: sv(b, 'change_summary', 60000), status: 'published', created: now()});
-    st.working = {name: '', entries: [], summary_md: null, summary_reviewed: false};      // the working version starts over for the next release
+    st.an_versions.push({id: vid, analysis_id: a.id, number: num, published_on: pub, notes, pdf, change_summary: sv(b, 'change_summary', 60000), change_report: st.working.change_report || '', status: 'published', created: now()});
+    st.working = {name: '', entries: [], summary_md: null, summary_reviewed: false, pdf: null, change_report: ''};      // the working version starts over for the next release
     // Stamp the unreleased working draft with this version: it becomes this version's historical record.
     st.plot_versions.forEach(v => { if (!v.an_version_id) v.an_version_id = vid; });
     st.usages.forEach(u => { if (!u.an_version_id && u.type === 'note') u.an_version_id = vid; });   // meeting records are not tied to an AN version
@@ -729,7 +752,7 @@ const ROUTES = [
   R('POST', A_ + '\\/versions$', H.publish), R('PATCH', A_ + `\\/versions\\/(?<id>${ID})$`, H.updateVersion),
   R('POST', A_ + `\\/versions\\/(?<id>${ID})\\/pdf$`, H.setVersionPdf), R('DELETE', A_ + `\\/versions\\/(?<id>${ID})\\/pdf$`, H.removeVersionPdf),
   R('POST', A_ + '\\/categories$', H.createCategory), R('PATCH', A_ + `\\/categories\\/(?<id>${ID})$`, H.updateCategory),
-  R('PATCH', A_ + `\\/plots\\/(?<id>${ID})$`, H.updatePlot), R('POST', A_ + '\\/working$', H.updateWorking), R('POST', A_ + '\\/working\\/entries$', H.addWorkingEntry), R('DELETE', A_ + `\\/working\\/entries\\/(?<id>${ID})$`, H.deleteWorkingEntry),
+  R('PATCH', A_ + `\\/plots\\/(?<id>${ID})$`, H.updatePlot), R('POST', A_ + '\\/working\\/pdf$', H.setWorkingPdf), R('DELETE', A_ + '\\/working\\/pdf$', H.removeWorkingPdf), R('POST', A_ + `\\/versions\\/(?<id>${ID})\\/changes$`, H.setVersionChanges), R('POST', A_ + '\\/working$', H.updateWorking), R('POST', A_ + '\\/working\\/entries$', H.addWorkingEntry), R('DELETE', A_ + `\\/working\\/entries\\/(?<id>${ID})$`, H.deleteWorkingEntry),
   R('POST', A_ + `\\/reviews\\/(?<id>${ID})\\/status$`, H.setReviewStatus), R('POST', A_ + `\\/an-comments\\/(?<id>${ID})\\/status$`, H.setAnCommentStatus), R('DELETE', A_ + `\\/categories\\/(?<id>${ID})$`, H.deleteCategory),
   R('POST', A_ + '\\/upload$', H.upload),
   R('POST', A_ + '\\/plots$', H.createPlot), R('DELETE', A_ + `\\/plots\\/(?<id>${ID})$`, H.deletePlot),

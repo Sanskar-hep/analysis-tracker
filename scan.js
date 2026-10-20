@@ -282,5 +282,6 @@
         await reload(); toast(`${n} comment${n === 1 ? '' : 's'} linked to their figures.`);
       }});
   }
-  window.SCAN = {start, scan, linkComments, findCaptions, CAP, _dbg: {pageImages, cropVectors, fingerprint, dist, toCanvas}};
+  const isHeading = (ln, body) => ln.fs >= body * 1.08 && ln.text.length < 90 && (SEC.test(ln.text) || APP.test(ln.text)) && !CAP.test(ln.text);
+  window.SCAN = {start, scan, linkComments, pageLines, pageImages, cropVectors, toCanvas, fingerprint, dist, thumb, isHeading, findCaptions, CAP, _dbg: {pageImages, cropVectors, fingerprint, dist, toCanvas}};
 })();

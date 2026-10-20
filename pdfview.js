@@ -273,5 +273,10 @@
     PDFV.jump = jump; if (PDFV.vid !== vid) Object.assign(PDFV, {vid, doc: null, fp: null, match: null, scroll: 0, restoreTried: false, saved: false, file: null});
     go(L('/pdf/' + vid)); if (route()[3] === vid) render();
   }
-  window.PDF = {viewPdf, mountPdf, act, open, openFile, clearAll, state: PDFV};
+  async function fileFor(vid) {                              // the PDF of a version: the copy on this device, else the one stored in the repository
+    const v = anv(vid); if (!v) return null; const c = await loadCopy(vid); if (c && c.blob) return new File([c.blob], c.name, {type: 'application/pdf'});
+    if (v.pdf && v.pdf.file_id) { const url = await fetchImage(S.an.id, v.pdf.file_id, v.pdf.ext || '.pdf'); return new File([await (await fetch(url)).blob()], v.pdf.name, {type: 'application/pdf'}); }
+    return null;
+  }
+  window.PDF = {ensure: ensureLib, fileFor, viewPdf, mountPdf, act, open, openFile, clearAll, state: PDFV};
 })();

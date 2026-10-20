@@ -305,7 +305,7 @@ function renderSide() {
       ${nav(L(''), 'Overview', !pg, 0, 'Where you stand and what to do next')}
       ${nav(L('/gallery'), 'Plot Gallery', ['gallery', 'cat', 'plot'].includes(pg), 0, 'All plots, grouped by variable and era')}
       ${nav(commentsHref, 'Comments', ['reviewer', 'meetings', 'pending'].includes(pg), pend, 'Comments from conveners and meetings, and your answers')}
-      ${isAN() ? nav(L('/versions'), 'Version History', pg === 'versions', 0, 'Published AN versions and plot revisions') : ''}
+      ${isAN() ? nav(L('/versions'), 'Version History', pg === 'versions' || pg === 'compare-an', 0, 'Published AN versions and plot revisions') : ''}
       ${isAN() ? nav(L('/release'), 'Release &amp; Export', pg === 'release', 0, 'Check what is ready, then download the package') : ''}
       <div class="sec"><span>More</span></div>
       ${isAN() ? nav(L('/docs'), 'Documents', pg === 'docs') : ''}
@@ -717,11 +717,11 @@ function viewVersions() {
       <td>${rv.filter(isOpen).length ? `<span class="badge pending">${rv.filter(isOpen).length} open</span>` : ''}<span class="badge resolved">${rv.filter(r => r.status === 'resolved').length} resolved</span></td><td>${docs}</td>
       <td>${v.pdf ? `<span class="meta" title="${esc(v.pdf.name)}">${esc(v.pdf.name.length > 24 ? v.pdf.name.slice(0, 22) + '…' : v.pdf.name)}</span><br><span class="badge ${v.pdf.file_id ? 'ok' : ''}">${v.pdf.file_id ? 'stored' : 'on your computer'}</span><br>` : ''}<button class="btn sm" data-act="open-pdf" data-v="${v.id}">${v.pdf ? 'Open' : 'Open / record'}</button></td>
       <td class="pre">${esc(v.notes) || '<span class="meta">—</span>'}</td>
-      <td style="white-space:nowrap"><button class="btn sm" data-act="open-anv" data-id="${v.id}">Open</button> <button class="btn sm" data-act="edit-anv" data-id="${v.id}">Edit</button> ${v.change_summary ? `<button class="btn sm" data-act="show-summary" data-id="${v.id}">Changes</button>` : ''}</td></tr>`;
+      <td style="white-space:nowrap"><button class="btn sm" data-act="open-anv" data-id="${v.id}">Open</button> <button class="btn sm" data-act="edit-anv" data-id="${v.id}">Edit</button> ${v.change_summary || v.change_report ? `<button class="btn sm" data-act="show-summary" data-id="${v.id}">Changes</button>` : ''}${i < S.anv.length - 1 ? `<button class="btn sm" data-act="anc" data-op="open" data-a="${[...S.anv].reverse()[i + 1].id}" data-b="${v.id}" title="What changed from the previous version">vs previous</button>` : ''}</td></tr>`;
   }).join('');
   const draftN = S.versions.filter(v => !v.anvId).length, draftU = S.usages.filter(u => !u.anvId && u.type === 'note').length, next = (S.anv.length ? latestAnv().number : 0) + 1;
   return `<div class="pagehead"><div><h1>AN versions</h1><p>${esc(S.an.an_name)} · ${esc(S.an.collaboration)}. Each published version keeps its own plots, comments and documents.</p></div>
-    <div class="actions"><button class="btn primary" data-act="publish">${S.anv.length ? `Publish AN v${next}` : 'Publish first version'}</button></div></div>
+    <div class="actions"><button class="btn" data-act="anc" data-op="open" data-a="${S.anv.length > 1 ? S.anv[S.anv.length - 2].id : ''}" data-b="${S.anv.length ? S.anv[S.anv.length - 1].id : ''}">Compare AN versions</button><button class="btn primary" data-act="publish">${S.anv.length ? `Publish AN v${next}` : 'Publish first version'}</button></div></div>
   <div class="card pad" style="margin-bottom:20px"><b>Working draft:</b> ${draftN} new plot version${draftN === 1 ? '' : 's'} and ${draftU} record${draftU === 1 ? '' : 's'} not yet in a published version. ${S.anv.length ? '' : 'Publishing creates AN v1 and unlocks reviewer comments.'}
     <button class="link" data-act="to-draft-dash">View working draft</button></div>
   ${S.anv.length ? `<div class="card" style="overflow:auto"><table class="vtable"><tr><th>Version</th><th>Published</th><th>Figures</th><th>Plot versions</th><th>Reviewer comments</th><th>Documents</th><th>AN PDF</th><th>Notes</th><th></th></tr>${rows}</table></div>`
@@ -741,11 +741,11 @@ function publishModal(editV) {
   openModal({title: `Publish AN v${next}`, submit: `Publish v${next}`, wide: true,
     sub: `This creates a new AN version record. The ${dn} plot version${dn === 1 ? '' : 's'} and ${du} record${du === 1 ? '' : 's'} in your working draft become part of it, and the change summary from “Prepare release” is saved with it. Earlier versions are not changed.`,
     body: (editV ? '' : REL.warnHtml()) + `<div class="cols">${field('Version number', `<input type="text" name="number" value="${REL.suggestedNumber()}" inputmode="numeric">`)}${field('Publication date', `<input type="date" name="published_on" value="${today()}">`)}</div>`
-      + field('Notes', '<textarea name="notes" placeholder="e.g. Addressed ARC comments; new systematics table."></textarea>', '', true) + pdfField()
+      + field('Notes', '<textarea name="notes" placeholder="e.g. Addressed ARC comments; new systematics table."></textarea>', '', true) + (prev ? `<div class="card pad"><b>AN PDF of this version</b><div class="meta">${esc(S.work.pdf.name)} · ${(S.work.pdf.size / 1048576).toFixed(1)} MB — the PDF you uploaded in Release &amp; Export. It becomes the PDF of this version.</div></div>` : pdfField())
       + (prev ? `<label style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" name="carry" checked style="margin-top:4px"><span>Carry over Analysis Note figures from AN v${prev.number} that I haven't re-assigned <span class="meta">(each uses its plot's latest version; reviewer comments are not copied)</span></span></label>` : ''),
     onSubmit: async fd => {
       const n = parseInt(fd.get('number'), 10); if (!(n >= 1)) throw new Error('Version number must be a positive whole number');
-      const r = await api('POST', aurl('/versions'), {number: n, published_on: fd.get('published_on') || today(), notes: fd.get('notes').trim(), carry_figures: !!fd.get('carry'), pdf: await pdfFingerprint(fd.get('pdf')), change_summary: REL.effectiveSummary()});
+      const r = await api('POST', aurl('/versions'), {number: n, published_on: fd.get('published_on') || today(), notes: fd.get('notes').trim(), carry_figures: !!fd.get('carry'), pdf: prev ? undefined : await pdfFingerprint(fd.get('pdf')), change_summary: REL.effectiveSummary()});
       await pdfAfter(fd, S.an.id, r.id); await loadAnalysis(S.an.id); setCtx(r.id); toast(`AN v${r.number} published${r.carried ? ` — ${r.carried} figure(s) carried over` : ''}`); go(L('')); render();
     }});
 }
@@ -836,11 +836,13 @@ function render() {
     else if (s[0] === 'settings') h = viewSettings();
     else if (s[0] === 'pdf') h = PDF.viewPdf(s[1]);
     else if (s[0] === 'release') h = REL.view();
+    else if (s[0] === 'compare-an') h = ANC.view();
     else h = notFound();
   }
   if (r[0] === 'a' && S && ['meetings', 'reviewer', 'pending'].includes(r[2])) h = commentTabs(r[2]) + h;
   $('#main').innerHTML = h;
   hydrateImages();
+  if (r[0] === 'a' && S && r[2] === 'compare-an') ANC.refreshHave();
   if (r[0] === 'a' && S && r[2] === 'pdf') PDF.mountPdf();
 }
 
@@ -1289,7 +1291,7 @@ const A = {
   'to-draft-dash': () => { setCtx('draft'); go(L('')); render(); },
   'open-anv': el => { setCtx(el.dataset.id); go(L('')); render(); },
   'edit-anv': el => editAnvModal(anv(el.dataset.id)),
-  publish: () => publishModal(),
+  publish: () => { const p = REL.pdfProblem(); if (p) { toast(p, 'err', 9000); go(L('/release')); return; } publishModal(); },
   'new-cat': () => newCatModal(),
   'new-sub': el => newCatModal(null, el.dataset.id),
   'edit-cat': el => editCatModal(cat(el.dataset.id)),
@@ -1377,6 +1379,7 @@ const A = {
   'set-status': async el => { await api('POST', aurl(`/${el.dataset.kind === 'anc' ? 'an-comments' : 'reviews'}/${el.dataset.id}/status`), {status: el.dataset.status}); await reload(); },
   rel: el => REL.act(el),
   gal: el => GAL.act(el),
+  anc: el => ANC.act(el),
   'show-summary': el => REL.showVersionSummary(el.dataset.id),
   'more-plot': el => { const f = findReview(el.dataset.id); resolveModal(f.u, f.r, true); },
   'add-figure': () => figureBuilderModal(),
@@ -1511,7 +1514,7 @@ async function createDemoInner() {
   await rv(u43, {role: 'ARC member', name: 'K. Tanaka', text: 'Add the systematic uncertainty band to the ratio panel.'});
   await api('POST', ap(`/reviews/${r1}/resolve`), {mode: 'plot', file_id: await up({...P1, nb: 30, labels: true, ratio: true, legend: true, logy: true, seed: 3, color: '#1f7a4d'}), changes: 'Switched the y-axis to log scale so the high-pT tail is visible.', file_name: 'leading-electron-pt_v3_AN-Fig4.2_R1-c1_log-y-axis'});
   await v1(p1.id, {...P1, nb: 30, labels: true, ratio: true, legend: true, logy: true, prelim: true, seed: 3, color: '#1f7a4d'}, {summary: 'Final style: log-y, ratio, “Preliminary” label', changes: 'Added “Preliminary” label; unified colours with the other figures.', motivation: 'Prepare AN v2.', dataset: ds});
-  await api('POST', ap('/versions'), {number: 2, published_on: today(), notes: 'Addressed Reviewer 1 and ARC comments.', carry_figures: true});
+  await api('POST', ap('/versions'), {number: 2, published_on: today(), notes: 'Addressed Reviewer 1 and ARC comments.', carry_figures: true, skip_pdf_check: true});
   st = await api('GET', ap(''));
   const v2fig = st.usages.find(u => u.type === 'note' && u.fig === '4.2' && u.an_version_id === st.an_versions[1].id).id;
   await rv(v2fig, {role: 'Reviewer 1', name: 'A. Meyer', text: 'Thanks — please also state the integrated luminosity in the label.'});
