@@ -98,11 +98,12 @@ function migrate(st) {                                    // older files get the
   st.plot_versions.forEach(v => { v.reviewed = !!v.reviewed; });
   st.working = st.working || {name: '', entries: [], summary_md: null, summary_reviewed: false};
   if (st.working.pdf === undefined) st.working.pdf = null; st.working.change_report = st.working.change_report || '';
+  st.src_map = st.src_map || {};
   st.an_versions.forEach(v => { v.change_report = v.change_report || ''; });
   if (st.analysis && st.analysis.presented === undefined) st.analysis.presented = false;
   return st;
 }
-const newState = () => ({format: 2, analysis: null, an_versions: [], categories: [], plots: [], plot_versions: [], usages: [], documents: [], files: [], an_comments: [], working: {name: '', entries: [], summary_md: null}});
+const newState = () => ({format: 2, analysis: null, an_versions: [], categories: [], plots: [], plot_versions: [], usages: [], documents: [], files: [], an_comments: [], src_map: {}, working: {name: '', entries: [], summary_md: null}});
 
 /* One atomic commit: blobs -> tree -> commit -> fast-forward the branch. Throws {conflict:true} if someone pushed meanwhile. */
 async function commit(head, changes, message) {
@@ -604,6 +605,13 @@ const H = {
   }, {message: 'Add AN comment'}),
   updateAnComment: ({aid, id}, b) => tx(aid, st => { const c = byId(st.an_comments, id, 'Comment'); Object.assign(c, anCommentFields(b, c.source)); return {ok: true}; }, {message: 'Edit comment'}),
   answerAnComment: ({aid, id}, b) => tx(aid, st => { byId(st.an_comments, id, 'Comment').answer = sv(b, 'answer', 5000); return {ok: true}; }, {message: 'Write answer'}),
+  /* which file of the LaTeX source belongs to which plot (remembered for the next AN version) */
+  setSourceMap: ({aid}, b) => tx(aid, st => {
+    const m = b.map && typeof b.map === 'object' ? b.map : {}, ids = new Set(st.plots.map(p => p.id)); st.src_map = st.src_map || {};
+    for (const [k, v] of Object.entries(m)) { const key = String(k).slice(0, 300); if (!key) continue; if (v === null) delete st.src_map[key]; else if (ids.has(v)) st.src_map[key] = v; }
+    const keys = Object.keys(st.src_map); if (keys.length > 3000) throw E(400, 'Too many remembered source files (limit 3000)');
+    return {ok: true, count: keys.length};
+  }, {message: 'Remember which source files belong to which plots'}),
   answerReview: ({aid, id}, b) => tx(aid, st => { findReview(st, id).answer = sv(b, 'answer', 5000); return {ok: true}; }, {message: 'Write answer'}),
   anchorAnComment: ({aid, id}, b) => tx(aid, st => { byId(st.an_comments, id, 'Comment').anchor = anchorOk(b.anchor); return {ok: true}; }, {message: 'Place comment in the PDF'}),
   anchorReview: ({aid, id}, b) => tx(aid, st => { findReview(st, id).anchor = anchorOk(b.anchor); return {ok: true}; }, {message: 'Place comment in the PDF'}),
@@ -752,7 +760,7 @@ const ROUTES = [
   R('POST', A_ + '\\/versions$', H.publish), R('PATCH', A_ + `\\/versions\\/(?<id>${ID})$`, H.updateVersion),
   R('POST', A_ + `\\/versions\\/(?<id>${ID})\\/pdf$`, H.setVersionPdf), R('DELETE', A_ + `\\/versions\\/(?<id>${ID})\\/pdf$`, H.removeVersionPdf),
   R('POST', A_ + '\\/categories$', H.createCategory), R('PATCH', A_ + `\\/categories\\/(?<id>${ID})$`, H.updateCategory),
-  R('PATCH', A_ + `\\/plots\\/(?<id>${ID})$`, H.updatePlot), R('POST', A_ + '\\/working\\/pdf$', H.setWorkingPdf), R('DELETE', A_ + '\\/working\\/pdf$', H.removeWorkingPdf), R('POST', A_ + `\\/versions\\/(?<id>${ID})\\/changes$`, H.setVersionChanges), R('POST', A_ + '\\/working$', H.updateWorking), R('POST', A_ + '\\/working\\/entries$', H.addWorkingEntry), R('DELETE', A_ + `\\/working\\/entries\\/(?<id>${ID})$`, H.deleteWorkingEntry),
+  R('PATCH', A_ + `\\/plots\\/(?<id>${ID})$`, H.updatePlot), R('POST', A_ + '\\/source-map$', H.setSourceMap), R('POST', A_ + '\\/working\\/pdf$', H.setWorkingPdf), R('DELETE', A_ + '\\/working\\/pdf$', H.removeWorkingPdf), R('POST', A_ + `\\/versions\\/(?<id>${ID})\\/changes$`, H.setVersionChanges), R('POST', A_ + '\\/working$', H.updateWorking), R('POST', A_ + '\\/working\\/entries$', H.addWorkingEntry), R('DELETE', A_ + `\\/working\\/entries\\/(?<id>${ID})$`, H.deleteWorkingEntry),
   R('POST', A_ + `\\/reviews\\/(?<id>${ID})\\/status$`, H.setReviewStatus), R('POST', A_ + `\\/an-comments\\/(?<id>${ID})\\/status$`, H.setAnCommentStatus), R('DELETE', A_ + `\\/categories\\/(?<id>${ID})$`, H.deleteCategory),
   R('POST', A_ + '\\/upload$', H.upload),
   R('POST', A_ + '\\/plots$', H.createPlot), R('DELETE', A_ + `\\/plots\\/(?<id>${ID})$`, H.deletePlot),

@@ -378,3 +378,11 @@ ins{background:color-mix(in srgb,var(--resolved) 28%,transparent);text-decoratio
 .ancfig{margin-top:10px}.ancpanels{display:grid;grid-template-columns:repeat(auto-fill,minmax(440px,1fr));gap:10px}@media (max-width:560px){.ancpanels{grid-template-columns:minmax(0,1fr)}}.ancpair{display:flex;gap:8px;align-items:flex-start;border:1px solid var(--line);border-radius:8px;padding:8px}
 .ancimg{width:200px;max-width:100%;background:#fff;border:1px solid var(--line);border-radius:6px;cursor:zoom-in}.ancnone{width:200px;height:90px;border:1px dashed var(--line);border-radius:6px;display:flex;align-items:center;justify-content:center;color:var(--mut);font-size:12.5px}
 .ancsec{margin-top:8px;padding:10px 14px}.ancsec summary{cursor:pointer;display:flex;gap:10px;flex-wrap:wrap;align-items:center}.anchunk{margin:8px 0;padding:8px 10px;background:var(--soft);border-radius:8px;font-size:13.5px;line-height:1.55}
+
+/* finishing the review round / LaTeX source figures */
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px}
+.anfrow{display:grid;grid-template-columns:auto 124px 124px minmax(0,1fr);gap:12px;align-items:start;margin-bottom:8px}
+.anfrow .sth{display:flex;flex-direction:column;gap:3px;align-items:flex-start}
+.anfrow .sth img{max-width:120px;max-height:90px;border:1px solid var(--border,#d6dbe3);border-radius:4px;background:#fff;cursor:zoom-in}
+.anfpath{word-break:break-all;font-size:12.5px}
+@media(max-width:640px){.anfrow{grid-template-columns:auto 1fr}.anfrow>div:last-child{grid-column:1 / -1}}

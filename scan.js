@@ -125,12 +125,14 @@
   const versionAt = (pid, num) => S.versions.filter(v => v.plotId === pid && v.anvId && anv(v.anvId).number <= num).sort(byVer).pop() || null;
 
   /* ---------- the scan ---------- */
-  async function scan(doc, vid) {
-    const av = anv(vid), done = busy('Reading the AN…');
+  /* opts.latest: match against every plot's NEWEST version (for the AN that is being prepared) instead of the version of a published AN */
+  const latestOf = pid => S.versions.filter(v => v.plotId === pid).sort(byVer).pop() || null;
+  async function scan(doc, vid, opts = {}) {
+    const av = vid ? anv(vid) : null, done = busy('Reading the AN…');
     try {
       done.set('Fingerprinting your plots…');
       const refs = [];
-      for (const p of S.plots) { const v = versionAt(p.id, av.number); if (!v) continue;
+      for (const p of S.plots) { const v = opts.latest ? latestOf(p.id) : versionAt(p.id, av.number); if (!v) continue;
         try { const im = await loadImg(await imageUrl(v)); refs.push({p, v, fp: fingerprint(im), era: GAL.plotEra(p)}); } catch { /* unreadable image: skipped */ } }
       const labels = (await doc.getPageLabels().catch(() => null)) || null, state = {body: 10, section: ''}, caps = [], pageImgs = new Map();
       // body text size = most common font size over the first pages
@@ -283,5 +285,5 @@
       }});
   }
   const isHeading = (ln, body) => ln.fs >= body * 1.08 && ln.text.length < 90 && (SEC.test(ln.text) || APP.test(ln.text)) && !CAP.test(ln.text);
-  window.SCAN = {start, scan, linkComments, pageLines, pageImages, cropVectors, toCanvas, fingerprint, dist, thumb, isHeading, findCaptions, CAP, _dbg: {pageImages, cropVectors, fingerprint, dist, toCanvas}};
+  window.SCAN = {start, scan, latestOf, linkComments, pageLines, pageImages, cropVectors, toCanvas, fingerprint, dist, thumb, isHeading, findCaptions, CAP, _dbg: {pageImages, cropVectors, fingerprint, dist, toCanvas}};
 })();

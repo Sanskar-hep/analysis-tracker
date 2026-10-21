@@ -284,6 +284,7 @@
       <div class="pagehead"><div><h1>Release &amp; Export · ${esc(name)}</h1><p>The working version always holds each plot at its newest version, compared with ${last ? anvLabel(last) : 'no earlier release'}. Released AN versions are never changed, and older plot versions stay in each plot's history.</p></div>
       <div class="actions"><button class="btn" data-act="rel" data-op="rename">Rename</button>${dlBtn('Download ZIP', '')}${pubBtn}</div></div>
       <div id="wpdfcard">${pdfCard()}</div>
+      ${window.ANF ? ANF.card() : ''}
       ${readyHtml(readiness())}
       <div class="tiles"><div class="card tile"><b>${cs.total}</b><span>Plots in this version</span></div><div class="card tile ${cs.updated ? 'warn' : ''}"><b>${cs.updated}</b><span>Updated</span></div><div class="card tile"><b>${cs.added}</b><span>New</span></div><div class="card tile"><b>${cs.unchanged}</b><span>Unchanged</span></div><div class="card tile ${open ? 'warn' : ''}"><b>${open}</b><span>Comments still open</span></div></div>
       <div class="sechead"><h2>Plots in ${esc(name)}</h2><div class="chips">${[['all', 'All'], ['updated', 'Updated'], ['new', 'New'], ['unchanged', 'Unchanged']].map(([k, l]) => `<span class="chip ${f === k ? 'on' : ''}" data-act="rel" data-op="filter" data-id="${k}">${l}</span>`).join('')}</div></div>

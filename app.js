@@ -34,6 +34,7 @@ function norm(st) {
       reviews: u.reviews.map(r => ({...r, none: !!r.none, resolvedVersionId: r.resolved_version_id, resolvedMore: r.resolved_more || [], resolvedAt: r.resolved_at}))})),
     docs: st.documents.map(d => ({...d, anvId: d.an_version_id})),
     anc: (st.an_comments || []).map(c => ({...c, anvId: c.an_version_id, resolvedIn: c.resolved_in})),
+    srcMap: st.src_map || {},
   };
 }
 async function loadAnalysis(id) { S = norm(await api('GET', `/analyses/${id}`)); }
@@ -1387,6 +1388,7 @@ const A = {
   rel: el => REL.act(el),
   gal: el => GAL.act(el),
   anc: el => ANC.act(el),
+  anf: el => ANF.act(el),
   'show-summary': el => REL.showVersionSummary(el.dataset.id),
   'more-plot': el => { const f = findReview(el.dataset.id); resolveModal(f.u, f.r, true); },
   'add-figure': () => figureBuilderModal(),
