@@ -295,7 +295,7 @@
       <label id="sumbox" class="chk" style="margin:10px 2px"><input type="checkbox" data-act="rel" data-op="sumrev" ${S.work && S.work.summary_reviewed ? 'checked' : ''}> I have read and reviewed this change summary</label>
       <div class="sechead"><h2>Download</h2></div>
       <div class="card pad"><p style="margin-top:0">One ZIP with <b>all ${cs.total} plots</b> (changed or not) in the category and subcategory folders, plus the review history and this summary. Extracting it recreates the folders on your computer.</p><pre class="mdpre">${esc(treePreview(plan))}</pre>
-        ${dlBtn('Download ' + plan.root + '.zip', 'primary')} <span class="meta">Comments still open: ${open}${open ? ' (they are listed under “Still Open”)' : ''}</span></div>`;
+        ${dlBtn('Download ' + plan.root + '.zip', 'primary')} <button class="btn" data-act="gdoc" title="Every comment, its reply and the plots, as a file that opens in Google Docs">Export comments to Google Docs</button> <span class="meta">Comments still open: ${open}${open ? ' (they are listed under “Still Open”)' : ''}</span></div>`;
   }
 
   function entryModal() {

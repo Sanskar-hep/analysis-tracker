@@ -555,7 +555,7 @@ function viewMeetings() {
       ${uses.length ? `<div class="meta" style="margin:6px 0 0">Comments on plots</div>${usageList(uses, '')}` : ''}`;
   }).join('');
   return `<div class="pagehead"><div><h1>Meetings</h1><p>${all.length} meeting${all.length === 1 ? '' : 's'} · ${nP} pending comment${nP === 1 ? '' : 's'}. Comments about a plot and general methodology suggestions.</p></div>
-    <div class="actions"><button class="btn" data-act="import-email" data-type="meeting">Import comments from email</button><button class="btn" data-act="add-mplot">+ Plot shown in a meeting</button><button class="btn danger" data-act="del-all-comments" data-scope="meeting">Delete all comments</button><button class="btn primary" data-act="add-mcomment">+ Methodology comment</button></div></div>
+    <div class="actions"><button class="btn" data-act="import-email" data-type="meeting">Import comments from email</button><button class="btn" data-act="add-mplot">+ Plot shown in a meeting</button><button class="btn" data-act="gdoc" title="One file with every comment, its reply and the plots, ready to open as a Google Doc">Export to Google Docs</button><button class="btn danger" data-act="del-all-comments" data-scope="meeting">Delete all comments</button><button class="btn primary" data-act="add-mcomment">+ Methodology comment</button></div></div>
     ${names.length > 1 ? `<div class="chips" style="margin-bottom:6px">${['all', ...names].map(n => `<span class="chip ${f === n ? 'on' : ''}" data-act="mfilter" data-id="${esc(n)}">${n === 'all' ? 'All meetings' : esc(n)}</span>`).join('')}</div>` : ''}
     ${sections || '<div class="card empty">No meetings recorded yet. Use <b>+ Plot shown in a meeting</b> (a plot you presented), <b>+ Methodology comment</b> (a general suggestion), or open a plot and choose <b>+ Meeting</b>.</div>'}`;
 }
@@ -574,7 +574,7 @@ function viewReviewer() {
   const kinds = [...new Set(ancAll.map(x => x.kind))];
   const pdf = c.v.pdf;
   return `${banner()}<div class="pagehead"><div><h1>AN review · ${c.label}</h1><p>${nP} open · ${all.length - nP} resolved. These comments stay with ${c.label} even after newer versions are published.<br><span class="meta">AN PDF: ${pdf ? esc(pdf.name) + (pdf.file_id ? ' (stored in the repository: opens on any device)' : ' (kept on your computer only)') : 'not recorded yet'} — use <b>Open the AN PDF</b>.</span></p></div>
-    <div class="actions"><button class="btn" data-act="open-pdf" data-v="${c.id}">Open the AN PDF${pdf ? '' : ' …'}</button><button class="btn" data-act="import-email" data-type="note">Import comments from email</button><button class="btn" data-act="add-figure">+ Figure with several plots</button><button class="btn" data-act="link-comments" title="Put the comments that mention a figure onto that figure">Link comments to figures</button><button class="btn danger" data-act="del-all-comments" data-scope="an">Delete all comments</button><button class="btn" data-act="reply-doc">Reply document</button><button class="btn primary" data-act="add-anc">+ Add comment</button></div></div>
+    <div class="actions"><button class="btn" data-act="open-pdf" data-v="${c.id}">Open the AN PDF${pdf ? '' : ' …'}</button><button class="btn" data-act="import-email" data-type="note">Import comments from email</button><button class="btn" data-act="add-figure">+ Figure with several plots</button><button class="btn" data-act="link-comments" title="Put the comments that mention a figure onto that figure">Link comments to figures</button><button class="btn danger" data-act="del-all-comments" data-scope="an">Delete all comments</button><button class="btn" data-act="reply-doc">Reply document</button><button class="btn" data-act="gdoc" title="One file with every comment, its reply and the plots, ready to open as a Google Doc">Export to Google Docs</button><button class="btn primary" data-act="add-anc">+ Add comment</button></div></div>
     <div class="chips" style="margin-bottom:6px">${[['all', 'All'], ['pending', 'Open'], ['resolved', 'Resolved']].map(([k, l]) => `<span class="chip ${f === k ? 'on' : ''}" data-act="rfilter" data-id="${k}">${l}</span>`).join('')}</div>
     <div class="sechead"><h2>Comments on figures <span class="count">${figShown.length}</span></h2></div>
     ${figShown.length ? figGroups(figShown).map(figureCard).join('') : '<div class="card empty">No comments on figures yet. Figures appear here when a plot is recorded as an AN figure (open a plot → <b>+ Analysis Note</b>, or use <b>+ Figure with several plots</b>) and a comment is added to it.</div>'}
@@ -1368,7 +1368,7 @@ const A = {
         await reload(); toast(`Deleted ${r.reviews + r.comments} comment${r.reviews + r.comments === 1 ? '' : 's'}.`);
       }});
   },
-  'add-anc': () => ancModal(), 'reply-doc': () => replyModal(), 'edit-anc': el => ancModal(S.anc.find(c => c.id === el.dataset.id)),
+  'add-anc': () => ancModal(), 'reply-doc': () => replyModal(), 'gdoc': () => GDOC.run(), 'edit-anc': el => ancModal(S.anc.find(c => c.id === el.dataset.id)),
   'resolve-anc': el => resolveAncModal(S.anc.find(c => c.id === el.dataset.id)),
   'reopen-anc': async el => { await api('POST', aurl(`/an-comments/${el.dataset.id}/reopen`)); await reload(); },
   'del-anc': el => confirmBox('Delete comment', 'Delete this comment?', 'Delete', async () => { await api('DELETE', aurl('/an-comments/' + el.dataset.id)); await reload(); }),
@@ -1376,7 +1376,14 @@ const A = {
   'edit-rv': el => { const f = findReview(el.dataset.id); reviewModal(f.u, f.r); },
   'del-rv': el => confirmBox('Delete feedback', 'Delete this feedback entry?', 'Delete', async () => { await api('DELETE', aurl('/reviews/' + el.dataset.id)); await reload(); }),
   resolve: el => { const f = findReview(el.dataset.id); resolveModal(f.u, f.r); },
-  'set-status': async el => { await api('POST', aurl(`/${el.dataset.kind === 'anc' ? 'an-comments' : 'reviews'}/${el.dataset.id}/status`), {status: el.dataset.status}); await reload(); },
+  /* shows the new status at once and saves in the background (the save takes a few seconds); puts the old status back if saving fails */
+  'set-status': async el => {
+    const anc = el.dataset.kind === 'anc', id = el.dataset.id, status = el.dataset.status, x = anc ? S.anc.find(c => c.id === id) : (findReview(id) || {}).r;
+    if (!x) { await reload(); return; }
+    const before = x.status; x.status = status; render();
+    try { await api('POST', aurl(`/${anc ? 'an-comments' : 'reviews'}/${id}/status`), {status}); }
+    catch (e) { x.status = before; render(); toast('Could not save the status: ' + e.message, 'err', 7000); }
+  },
   rel: el => REL.act(el),
   gal: el => GAL.act(el),
   anc: el => ANC.act(el),
