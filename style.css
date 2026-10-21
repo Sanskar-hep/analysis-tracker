@@ -386,3 +386,13 @@ ins{background:color-mix(in srgb,var(--resolved) 28%,transparent);text-decoratio
 .anfrow .sth img{max-width:120px;max-height:90px;border:1px solid var(--border,#d6dbe3);border-radius:4px;background:#fff;cursor:zoom-in}
 .anfpath{word-break:break-all;font-size:12.5px}
 @media(max-width:640px){.anfrow{grid-template-columns:auto 1fr}.anfrow>div:last-child{grid-column:1 / -1}}
+
+.badge.cadi{background:color-mix(in srgb,#b45309 16%,transparent);color:#b45309;border:1px solid color-mix(in srgb,#b45309 35%,transparent)}
+@media (prefers-color-scheme:dark){.badge.cadi{color:#fbbf6a}}
+.cadichoice{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px}
+.cadiopt input{position:absolute;opacity:0;pointer-events:none}
+.cadibox{display:grid;gap:2px;justify-items:center;text-align:center;padding:16px 10px;border:2px solid var(--line);border-radius:12px;cursor:pointer;background:var(--panel);transition:border-color .12s,background .12s}
+.cadibox small{color:var(--mut);font-size:12.5px}.cadiic{color:var(--mut)}
+.cadibox:hover{border-color:var(--acc)}
+.cadiopt input:checked+.cadibox{border-color:var(--acc);background:var(--soft)}.cadiopt input:checked+.cadibox .cadiic{color:var(--acc)}
+.cadiopt input:focus-visible+.cadibox{outline:2px solid var(--acc);outline-offset:2px}

@@ -284,10 +284,17 @@ function mountShell() {
 const logoSvg = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20h18M6 16v-5M11 16V6M16 16v-8M21 16v-3"/></svg>';
 const brand = `<a href="#/" class="brand" style="color:var(--ink)"><div class="logo">${logoSvg}</div>Analysis-Tracker</a><div class="by">by <a href="${CREDIT.url}" target="_blank" rel="noopener noreferrer">${CREDIT.name}</a></div>`;
 
+/* CADI indicator: shown only when this analysis has a CADI line (status is kept per analysis) */
+const cadiOf = a => (a && a.cadi) || {status: ''};
+const cadiIcon = '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="1" y="1" width="14" height="14" rx="3.5" fill="currentColor" opacity=".18"/><path d="M5 5.2h6M5 8h6M5 10.8h3.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none"/></svg>';
+function cadiBadge(a, full) {
+  const c = cadiOf(a); if (c.status !== 'yes') return '';
+  return `<span class="badge cadi" title="CADI line associated with this analysis${c.line ? ': ' + esc(c.line) : ''}" aria-label="CADI line associated with this analysis">${cadiIcon}CADI${full && c.line ? ' · ' + esc(c.line) : ''}</span>`;
+}
 function stageBadges(a) {
-  if (a.stage === 'just_started') return '<span class="badge stage">Just started</span>';
+  if (a.stage === 'just_started') return '<span class="badge stage">Just started</span>' + cadiBadge(a);
   const n = a.latest_version ?? (S && S.anv.length ? latestAnv().number : null);
-  return `<span class="badge stage">AN stage</span>${a.an_status === 'published' ? `<span class="badge ok">AN v${n} published</span>` : '<span class="badge">AN being written</span>'}`;
+  return `<span class="badge stage">AN stage</span>${a.an_status === 'published' ? `<span class="badge ok">AN v${n} published</span>` : '<span class="badge">AN being written</span>'}${cadiBadge(a)}`;
 }
 
 function renderSide() {
@@ -493,7 +500,7 @@ function viewDash() {
     return `<div class="row" data-go="${L('/plot/' + p.id)}" data-sel="${v.id}">${img(v)}<div class="t"><b>${esc(p.name)} <span class="badge">${verLabel(v)}</span></b><span>${esc(v.summary)}</span></div><span class="meta">${fmtDate(v.created)}</span></div>`;
   }).join('');
   const showComments = meetingsOn() || isPub();
-  return `${banner()}<div class="pagehead"><div><h1>${esc(S.an.title)}</h1><p>${isAN() ? esc(S.an.an_name || '') + (S.an.collaboration ? ' · ' + esc(S.an.collaboration) : '') + ' · ' : ''}${ctx().draft ? 'Working draft' : ctx().label}</p></div>
+  return `${banner()}<div class="pagehead"><div><h1>${esc(S.an.title)} ${cadiBadge(S.an, true)}</h1><p>${isAN() ? esc(S.an.an_name || '') + (S.an.collaboration ? ' · ' + esc(S.an.collaboration) : '') + ' · ' : ''}${ctx().draft ? 'Working draft' : ctx().label}</p></div>
     <div class="actions"><a class="btn" href="${L('/gallery')}">Open the Plot Gallery</a><button class="btn primary" data-act="bulk-plots">Upload many plots</button></div></div>
   ${gettingStarted()}
   <div class="guides">${guideCards()}</div>
@@ -785,6 +792,7 @@ function viewSettings() {
   <div class="card pad" style="max-width:760px;display:grid;gap:18px">
     <dl class="kv tight"><dt>Title</dt><dd>${esc(a.title)}</dd><dt>Stage</dt><dd>${a.stage === 'an_stage' ? 'AN stage' : 'Just started'}</dd>
       ${isAN() ? `<dt>AN name</dt><dd>${esc(a.an_name)}</dd><dt>Collaboration</dt><dd>${esc(a.collaboration)}</dd><dt>AN status</dt><dd>${isPub() ? `Published (latest: AN v${latestAnv().number})` : 'AN being written'}</dd>` : ''}
+      <dt>CADI line</dt><dd>${cadiText(a)} <button class="btn sm" data-act="cadi">${cadiOf(a).status === 'yes' || cadiOf(a).status === 'no' ? 'Change' : 'Answer'}</button></dd>
       <dt>Owner</dt><dd>${esc(a.owner_name || a.owner)}</dd><dt>Data repository</dt><dd class="mono">${esc(GHS.repo)}</dd><dt>Created</dt><dd>${fmtDate(a.created)}</dd></dl>
     <div class="actions">${a.owner === U.id ? '<button class="btn" data-act="edit-an">Edit details</button>' : ''}
       ${a.stage === 'just_started' && a.owner === U.id ? '<button class="btn primary" data-act="to-an">Move to AN stage</button>' : ''}
@@ -792,6 +800,34 @@ function viewSettings() {
     ${a.stage === 'just_started' ? '<div class="note-box">At the AN stage you add the AN name and collaboration, and can publish AN versions. Reviewer comments appear once the first version is published.</div>' : ''}
     ${a.owner === U.id ? '<div class="danger-zone"><h3>Delete this analysis</h3><p class="meta">Removes all of its plots, comments, versions and documents from the repository (they remain in git history).</p><button class="btn danger" data-act="del-an">Delete analysis…</button></div>' : '<div class="note-box">Only the owner can edit the analysis settings or delete it. Everyone in the group can add plots and comments.</div>'}
   </div>`;
+}
+const cadiText = a => { const c = cadiOf(a);
+  if (c.status === 'yes') return `${cadiBadge(a)} ${c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener noreferrer">${esc(c.line || c.url)}</a>` : esc(c.line || 'line not entered yet')}`;
+  return c.status === 'no' ? 'No CADI line' : '<span class="meta">Not specified</span>'; };
+function cadiModal() {
+  const a = S.an, c = cadiOf(a), id = a.id;
+  const opt = (v, t, d, svg) => `<label class="cadiopt"><input type="radio" name="cadi" value="${v}" ${c.status === v ? 'checked' : ''}><span class="cadibox"><span class="cadiic">${svg}</span><b>${t}</b><small>${d}</small></span></label>`;
+  openModal({title: 'Does this analysis have an associated CADI line?', submit: 'Save', wide: true,
+    sub: `Analysis: <b>${esc(a.title)}</b>. The answer is saved for this analysis only. Closing this window keeps it as “Not specified”; you can answer any time in Settings.`,
+    body: `<div class="cadichoice">${opt('yes', 'Yes', 'It has a CADI line', cadiIcon.replace('width="13" height="13"', 'width="26" height="26"'))}${opt('no', 'No', 'No CADI line', '<svg viewBox="0 0 16 16" width="26" height="26" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M4 12L12 4" stroke="currentColor" stroke-width="1.5"/></svg>')}</div>
+      <div id="cadifields" style="display:${c.status === 'yes' ? 'grid' : 'none'};gap:14px">
+        ${field('CADI line', `<input type="text" name="line" maxlength="100" value="${esc(c.line || '')}" placeholder="e.g. HIG-24-001">`, 'If you do not have it yet, leave this empty; the CADI icon is still shown.', true)}
+        ${field('Link to the CADI page', `<input type="url" name="url" maxlength="500" value="${esc(c.url || '')}" placeholder="https://cms.cern.ch/iCMS/analysisadmin/cadilines?line=HIG-24-001">`, '', true)}</div>`,
+    setup: f => f.querySelectorAll('input[name=cadi]').forEach(r => r.addEventListener('change', () => { $('#cadifields', f).style.display = f.cadi.value === 'yes' ? 'grid' : 'none'; })),
+    onSubmit: async fd => {
+      const v = fd.get('cadi'); if (!v) { toast('Choose Yes or No, or close this window to answer later', 'err'); return false; }
+      await api('POST', `/analyses/${id}/cadi`, {status: v, line: (fd.get('line') || '').trim(), url: (fd.get('url') || '').trim()});
+      await loadAnalysis(id); try { sessionStorage.removeItem('cadi-later-' + id); } catch {} render(); toast(v === 'yes' ? 'CADI line saved' : 'Saved: no CADI line');
+    }});
+  /* closing without an answer = ask again in a later session, not on every page */
+  try { sessionStorage.setItem('cadi-later-' + id, '1'); } catch {}
+}
+let cadiShown = false;
+function maybeCadi() {   // first time an analysis is opened (or until answered): ask once per browser session
+  const r = route(); if (r[0] !== 'a' || !S || cadiShown || document.querySelector('.overlay')) return;
+  const st = cadiOf(S.an).status; if (st === 'yes' || st === 'no') return;
+  try { if (sessionStorage.getItem('cadi-later-' + S.an.id)) return; } catch {}
+  cadiShown = true; setTimeout(() => { cadiShown = false; if (!document.querySelector('.overlay')) cadiModal(); }, 400);
 }
 function editAnModal() {
   const a = S.an;
@@ -845,6 +881,7 @@ function render() {
   hydrateImages();
   if (r[0] === 'a' && S && r[2] === 'compare-an') ANC.refreshHave();
   if (r[0] === 'a' && S && r[2] === 'pdf') PDF.mountPdf();
+  maybeCadi();
 }
 
 /* ============================ forms ============================ */
@@ -1395,7 +1432,7 @@ const A = {
   reopen: async el => { const f = findReview(el.dataset.id); try { await api('PATCH', aurl('/reviews/' + f.r.id), {role: f.r.role, name: f.r.name, none: false, text: f.r.text, status: 'pending'}); await reload(); } catch (e) { toast(e.message, 'err'); } },
   'new-doc': () => docModal(), 'edit-doc': el => docModal(S.docs.find(d => d.id === el.dataset.id)),
   'del-doc': el => confirmBox('Delete document', 'Delete this document record?', 'Delete', async () => { await api('DELETE', aurl('/documents/' + el.dataset.id)); await reload(); }),
-  'edit-an': () => editAnModal(),
+  'edit-an': () => editAnModal(), 'cadi': () => cadiModal(),
   'del-an': () => openModal({title: 'Delete analysis', submit: 'Delete forever', sub: `This permanently deletes <b>${esc(S.an.title)}</b> and everything in it.`,
     body: field('Type the analysis title to confirm', '<input type="text" name="t" autocomplete="off">'),
     onSubmit: async fd => { if (fd.get('t').trim() !== S.an.title) throw new Error('The title does not match'); await api('DELETE', aurl('')); S = null; go('#/'); toast('Analysis deleted'); }}),

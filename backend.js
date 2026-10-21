@@ -310,6 +310,13 @@ const H = {
     }, {create: true, message: `Create analysis "${title}"`});
     return {id: aid};
   },
+  /* CADI line of this analysis: {status: 'yes' | 'no' | 'unspecified', line, url}; stored per analysis */
+  setCadi: ({aid}, b) => tx(aid, st => {
+    const status = ['yes', 'no', 'unspecified'].includes(b.status) ? b.status : null; if (!status) throw E(400, 'Invalid CADI status');
+    const line = status === 'yes' ? sv(b, 'line', 100, false, '') : '', url = status === 'yes' ? sv(b, 'url', 500, false, '') : '';
+    if (url && !/^https?:\/\//i.test(url)) throw E(400, 'The CADI link must start with http:// or https://');
+    st.analysis.cadi = {status, line, url, by: ME().name, at: now()}; return {ok: true};
+  }, {message: 'Set CADI line status'}),
   setPresented: ({aid}, b) => tx(aid, st => { st.analysis.presented = !!b.value; return {ok: true}; }, {message: 'Meetings section ' + (b.value ? 'enabled' : 'disabled')}),
   async getAnalysis({aid}) { return clone(await readState(aid)); },
   async updateAnalysis({aid}, b) {
@@ -760,7 +767,7 @@ const ROUTES = [
   R('POST', A_ + '\\/versions$', H.publish), R('PATCH', A_ + `\\/versions\\/(?<id>${ID})$`, H.updateVersion),
   R('POST', A_ + `\\/versions\\/(?<id>${ID})\\/pdf$`, H.setVersionPdf), R('DELETE', A_ + `\\/versions\\/(?<id>${ID})\\/pdf$`, H.removeVersionPdf),
   R('POST', A_ + '\\/categories$', H.createCategory), R('PATCH', A_ + `\\/categories\\/(?<id>${ID})$`, H.updateCategory),
-  R('PATCH', A_ + `\\/plots\\/(?<id>${ID})$`, H.updatePlot), R('POST', A_ + '\\/source-map$', H.setSourceMap), R('POST', A_ + '\\/working\\/pdf$', H.setWorkingPdf), R('DELETE', A_ + '\\/working\\/pdf$', H.removeWorkingPdf), R('POST', A_ + `\\/versions\\/(?<id>${ID})\\/changes$`, H.setVersionChanges), R('POST', A_ + '\\/working$', H.updateWorking), R('POST', A_ + '\\/working\\/entries$', H.addWorkingEntry), R('DELETE', A_ + `\\/working\\/entries\\/(?<id>${ID})$`, H.deleteWorkingEntry),
+  R('PATCH', A_ + `\\/plots\\/(?<id>${ID})$`, H.updatePlot), R('POST', A_ + '\\/source-map$', H.setSourceMap), R('POST', A_ + '\\/cadi$', H.setCadi), R('POST', A_ + '\\/working\\/pdf$', H.setWorkingPdf), R('DELETE', A_ + '\\/working\\/pdf$', H.removeWorkingPdf), R('POST', A_ + `\\/versions\\/(?<id>${ID})\\/changes$`, H.setVersionChanges), R('POST', A_ + '\\/working$', H.updateWorking), R('POST', A_ + '\\/working\\/entries$', H.addWorkingEntry), R('DELETE', A_ + `\\/working\\/entries\\/(?<id>${ID})$`, H.deleteWorkingEntry),
   R('POST', A_ + `\\/reviews\\/(?<id>${ID})\\/status$`, H.setReviewStatus), R('POST', A_ + `\\/an-comments\\/(?<id>${ID})\\/status$`, H.setAnCommentStatus), R('DELETE', A_ + `\\/categories\\/(?<id>${ID})$`, H.deleteCategory),
   R('POST', A_ + '\\/upload$', H.upload),
   R('POST', A_ + '\\/plots$', H.createPlot), R('DELETE', A_ + `\\/plots\\/(?<id>${ID})$`, H.deletePlot),
