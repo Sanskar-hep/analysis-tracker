@@ -21,7 +21,6 @@ window.LANDING = (() => {
     <h1>Never lose the story behind a physics result.</h1>
     <p class="lsub">Every plot has a history. Every reviewer comment has a context. Every analysis decision has a reason.</p>
     <p class="lsub"><b>Analysis-Tracker</b> brings your plots, version history, reviewer discussions and the reasons for each change together in one place, from the first draft to the final Analysis Note.</p>
-    <p class="lwho">Built for HEP analysis teams who need to understand not just <i>what changed</i>, but <i>why it changed, who changed it, and what still needs to be checked.</i></p>
     <p class="lcta"><button class="btn primary" data-act="tryDemo">Explore the Demo →</button><a class="btn" href="#lflow">See How It Works</a></p>
     <p class="lnote" style="margin-top:10px">No sign-in required to explore the demo.</p>
   </div><div id="connect" class="lconnect">${connectCard}</div></section>
