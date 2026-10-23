@@ -46,9 +46,47 @@ async function pmap(items, fn, n = 6) {
 const utf8b64 = s => { const b = new TextEncoder().encode(s); let bin = ''; for (let i = 0; i < b.length; i += 0x8000) bin += String.fromCharCode(...b.subarray(i, i + 0x8000)); return btoa(bin); };
 const blobB64 = blob => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result.split(',')[1]); r.onerror = () => rej(r.error); r.readAsDataURL(blob); });
 
+/* ============================ demo mode: a small in-memory stand-in for GitHub ============================ */
+/* Used by "Try the demo": the same code runs against a throw-away repository that lives in this tab only. Nothing is sent anywhere. */
+const DEMO_MSG = 'This is the read-only demo. Sign in to make changes.';
+const DEMO = {blobs: {}, trees: {}, commits: {}, ref: null, n: 0};
+const demoSha = () => (++DEMO.n).toString(16).padStart(40, '0');
+function demoReset() {
+  Object.assign(DEMO, {blobs: {}, trees: {}, commits: {}, n: 0});
+  const b = demoSha(), t = demoSha(), c = demoSha();
+  DEMO.blobs[b] = new TextEncoder().encode('# demo data'); DEMO.trees[t] = {'README.md': b}; DEMO.commits[c] = {tree: t, parents: []}; DEMO.ref = c;
+}
+async function demoFetch(path, o = {}) {
+  const j = (code, obj) => new Response(JSON.stringify(obj), {status: code, headers: {'Content-Type': 'application/json'}});
+  const body = o.body || {}, m = o.method || 'GET', p = path.slice(repoPath().length), [pp, qs] = p.split('?');
+  let mm;
+  if (GHS.readonly && m !== 'GET') return j(403, {message: 'DEMO_LOCKED'});          // the demo repository cannot be written to once it is built
+  if (pp === '/git/ref/heads/main') return j(200, {object: {sha: DEMO.ref}});
+  if ((mm = pp.match(/^\/git\/commits\/(\w+)$/)) && m === 'GET') return j(200, {sha: mm[1], tree: {sha: DEMO.commits[mm[1]].tree}});
+  if (pp === '/git/blobs' && m === 'POST') { const h = demoSha(); DEMO.blobs[h] = Uint8Array.from(atob(body.content), ch => ch.charCodeAt(0)); return j(201, {sha: h}); }
+  if (pp === '/git/trees' && m === 'POST') {
+    const ents = {...DEMO.trees[body.base_tree]}; body.tree.forEach(t => { if (t.sha === null) delete ents[t.path]; else ents[t.path] = t.sha; });
+    const h = demoSha(); DEMO.trees[h] = ents; return j(201, {sha: h});
+  }
+  if (pp === '/git/commits' && m === 'POST') { const h = demoSha(); DEMO.commits[h] = {tree: body.tree, parents: body.parents}; return j(201, {sha: h}); }
+  if (pp === '/git/refs/heads/main' && m === 'PATCH') {
+    if (DEMO.commits[body.sha].parents[0] !== DEMO.ref) return j(422, {message: 'Update is not a fast forward'});
+    DEMO.ref = body.sha; return j(200, {object: {sha: body.sha}});
+  }
+  if ((mm = pp.match(/^\/contents\/(.*)$/)) && m === 'GET') {
+    const file = decodeURIComponent(mm[1]).replace(/\/+$/, ''), ents = DEMO.trees[DEMO.commits[new URLSearchParams(qs).get('ref')].tree];
+    if (file in ents) return o.raw ? new Response(DEMO.blobs[ents[file]], {status: 200}) : j(200, {type: 'file', path: file});
+    const kids = {}; Object.keys(ents).forEach(k => { if (k.startsWith(file + '/')) { const rest = k.slice(file.length + 1); kids[rest.split('/')[0]] = rest.includes('/') ? 'dir' : 'file'; } });
+    const names = Object.keys(kids);
+    return names.length ? j(200, names.map(n => ({name: n, type: kids[n], path: file + '/' + n}))) : j(404, {message: 'Not Found'});
+  }
+  return j(404, {message: 'Not Found'});
+}
+
 /* ============================ GitHub client ============================ */
 async function ghFetch(path, o = {}) {
-  const h = {Authorization: 'Bearer ' + GHS.token, Accept: o.raw ? 'application/vnd.github.raw+json' : 'application/vnd.github+json'};
+  if (GHS.demo) { const r = await demoFetch(path, o); if (r.ok || (o.allow || []).includes(r.status)) return r; throw E(r.status, r.status === 403 ? DEMO_MSG : 'Demo error ' + r.status); }
+  const h ={Authorization: 'Bearer ' + GHS.token, Accept: o.raw ? 'application/vnd.github.raw+json' : 'application/vnd.github+json'};
   if (o.body) h['Content-Type'] = 'application/json';
   let r;
   try { r = await fetch(CFG.apiBase + path, {method: o.method || 'GET', headers: h, body: o.body ? JSON.stringify(o.body) : undefined, cache: 'no-store'}); }
@@ -221,7 +259,7 @@ const isRemembered = repo => loadConns().find(c => c.repo === repo)?.remember ??
 const savedRepo = () => activeRepo() || (savedRepos()[0] || '');
 
 function resetSession() {
-  Object.assign(GHS, {token: null, repo: null, branch: null, user: null, head: null});
+  Object.assign(GHS, {token: null, repo: null, branch: null, user: null, head: null, demo: false, readonly: false});
   STATE_CACHE.clear(); TREE_CACHE.clear(); PENDING.clear();
 }
 async function ghConnect(repoInput, token, remember) {
@@ -241,6 +279,12 @@ async function ghConnect(repoInput, token, remember) {
   } catch (e) { resetSession(); throw e; }
   const list = loadConns().filter(c => c.repo !== repo); list.push({repo, token, remember: !!remember}); saveConns(list, repo);
   return GHS.user;
+}
+/* Demo session: nothing is saved on the device and nothing leaves the browser. */
+async function ghDemo() {
+  resetSession(); demoReset();
+  Object.assign(GHS, {token: 'demo', repo: 'demo/sample-data', branch: 'main', demo: true, readonly: false, user: {id: 'visitor', name: 'Demo visitor', email: ''}});
+  await getHead(); return GHS.user;
 }
 /* Connect to the active saved repository (or the first one whose token still works). */
 async function ghRestore() {
@@ -877,5 +921,9 @@ async function api(method, path, body, opts = {}) {
 }
 
 /* the only things the UI needs from this file */
-Object.assign(window, {api, batch, ghConnect, ghRestore, ghSwitch, ghForget, ghRemove, savedRepo, savedRepos, isRemembered, GHS, imgCached, fetchImage});
+const demoLock = () => { GHS.readonly = true; };
+async function demoResume() {        // a failed sign-in attempt must not end the demo
+  resetSession(); Object.assign(GHS, {token: 'demo', repo: 'demo/sample-data', branch: 'main', demo: true, readonly: true, user: {id: 'visitor', name: 'Demo visitor', email: ''}}); await getHead(); return GHS.user;
+}
+Object.assign(window, {api, batch, ghDemo, demoLock, demoResume, DEMO_MSG, ghConnect, ghRestore, ghSwitch, ghForget, ghRemove, savedRepo, savedRepos, isRemembered, GHS, imgCached, fetchImage});
 })();

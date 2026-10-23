@@ -24,8 +24,9 @@ let S = null;          // currently open analysis (normalised)
 let AL = [];           // list of the user's analyses
 const ui = {sel: {}, cmp: {}, mode: 'side', A: null, B: null, pf: 'all', ctx: {}, who: {}};
 /* every change sent from here also says which team member made it (picked from the owner's list when the analysis was opened) */
+const demoLocked = () => GHS.demo && GHS.readonly;
 { const api0 = window.api;
-  window.api = (m, p, b, o) => (m !== 'GET' && S && ui.who[S.an.id] && !(o && o.raw)) ? api0(m, p, {...(b || {}), _person: ui.who[S.an.id]}, o) : api0(m, p, b, o); }
+  window.api = (m, p, b, o) => demoLocked() && m !== 'GET' ? (askLogin(), Promise.reject(Object.assign(new Error(DEMO_MSG), {status: 403, demo: true}))) : (m !== 'GET' && S && ui.who[S.an.id] && !(o && o.raw)) ? api0(m, p, {...(b || {}), _person: ui.who[S.an.id]}, o) : api0(m, p, b, o); }
 
 function norm(st) {
   return {
@@ -170,6 +171,7 @@ const eraLabelOf = name => (String(name || '').match(/UL\s?20\d\d(?:pre|post)?(?
 
 /* ============================ ui primitives ============================ */
 function toast(msg, kind = '', ms) {
+  if (msg === DEMO_MSG) return;
   const t = document.createElement('div'); t.className = 'toast ' + kind; t.textContent = msg; document.body.appendChild(t);
   setTimeout(() => t.remove(), ms || (kind === 'err' ? 6000 : 2800));
 }
@@ -178,7 +180,8 @@ function busy(msg) {
   const el = document.createElement('div'); el.className = 'busybar'; el.innerHTML = `<span class="spin"></span><span class="bmsg">${esc(msg)}</span>`; document.body.appendChild(el);
   const done = () => el.remove(); done.set = m => { const s = el.querySelector('.bmsg'); if (s) s.textContent = m; }; return done;
 }
-function openModal({title, sub = '', body, submit = 'Save', wide = false, xl = false, onSubmit, setup}) {
+function openModal({title, sub = '', body, submit = 'Save', wide = false, xl = false, onSubmit, setup, allowDemo}) {
+  if (onSubmit && !allowDemo && demoLocked()) { askLogin(); return {m: document.createElement('div'), f: document.createElement('form'), close() {}}; }
   const m = document.createElement('div'); m.className = 'overlay';
   m.innerHTML = `<form class="modal ${xl ? 'xl' : wide ? 'wide' : ''}"><header><h3>${title}</h3><button type="button" class="x" data-close aria-label="Close">×</button></header>${sub ? `<p class="sub">${sub}</p>` : ''}<div class="mbody">${body}</div><footer><button type="button" class="btn" data-close>Cancel</button><button class="btn primary">${submit}</button></footer></form>`;
   document.body.appendChild(m);
@@ -222,6 +225,8 @@ function showConnect(msg = '') {
   const cfgRepo = (window.AT_CONFIG && window.AT_CONFIG.repo) || savedRepo();
   const cardHtml = `<div class="card authcard">
     <div class="brand"><div class="logo">${logoSvg}</div>Analysis-Tracker</div>
+    <div class="trydemo"><button type="button" class="btn primary" data-act="tryDemo">Try the demo — no sign-in</button><div class="hint">Opens a sample analysis with plots, comments and AN versions. Nothing to set up; nothing is saved.</div></div>
+    <div class="ordiv"><span>or use your own data</span></div>
     <h2 class="connh">Connect to your data</h2>
     <div class="hint">Your analyses are stored in a private GitHub repository. Sign in with a personal access token; GitHub decides who can read and write.</div>
     ${savedRepos().length ? `<div style="margin-top:16px"><div class="l" style="font-weight:600;font-size:13px;margin-bottom:6px">Saved repositories</div><div class="chips">${savedRepos().map(r => `<span class="chip" data-saved="${esc(r)}">${esc(r)}</span>`).join('')}</div></div>` : ''}
@@ -296,6 +301,9 @@ function cadiBadge(a, full) {
   return `<span class="badge cadi" title="CADI line associated with this analysis${c.line ? ': ' + esc(c.line) : ''}" aria-label="CADI line associated with this analysis">${cadiIcon}CADI${full && c.line ? ' · ' + esc(c.line) : ''}</span>`;
 }
 function stageBadges(a) {
+  return (GHS.demo ? '<span class="badge demo" title="Invented sample data, not a CMS result">DEMO</span>' : '') + stageBadges0(a);
+}
+function stageBadges0(a) {
   if (a.stage === 'just_started') return '<span class="badge stage">Just started</span>' + cadiBadge(a);
   const n = a.latest_version ?? (S && S.anv.length ? latestAnv().number : null);
   return `<span class="badge stage">AN stage</span>${a.an_status === 'published' ? `<span class="badge ok">AN v${n} published</span>` : '<span class="badge">AN being written</span>'}${cadiBadge(a)}`;
@@ -332,7 +340,7 @@ function renderTop() {
   const repos = savedRepos(), repoSel = `<div class="ctxsel" title="Data repository"><span>📁</span><select data-act="setrepo" aria-label="Data repository">
       ${repos.map(r => `<option value="${esc(r)}" ${r === GHS.repo ? 'selected' : ''}>${esc(r)}</option>`).join('')}
       <option value="__add">＋ Add another repository…</option></select></div>`;
-  const user = `${repoSel}${S ? TEAM.chip() : ''}<div class="who"><span title="Signed in to GitHub as ${esc(U.id)}">👤 ${esc(U.name)}</span><button class="btn sm" data-act="refresh" title="Load the latest changes from GitHub">↻</button><button class="btn sm" data-act="logout" title="Remove this repository from this device">Disconnect</button></div>`;
+  const user = GHS.demo ? `${S ? TEAM.chip() : ''}<div class="who"><span class="badge demo" title="Sample data kept in this browser tab only">Demo · nothing is saved</span><button class="btn sm primary" data-act="login">🔒 Sign in</button><button class="btn sm" data-act="exitdemo" title="Leave the demo">Exit demo</button></div>` : `${repoSel}${S ? TEAM.chip() : ''}<div class="who"><span title="Signed in to GitHub as ${esc(U.id)}">👤 ${esc(U.name)}</span><button class="btn sm" data-act="refresh" title="Load the latest changes from GitHub">↻</button><button class="btn sm" data-act="logout" title="Remove this repository from this device">Disconnect</button></div>`;
   let mid = '';
   if (S) {
     const c = ctx();
@@ -380,8 +388,10 @@ function viewHome() {
       <div class="meta">${a.owner === U.id ? 'Yours' : 'Owner: ' + esc(a.owner_name || a.owner)}</div></div>
       <div class="badges" style="margin:0">${stageBadges(a)}</div>
       <div class="stats"><span><b>${a.plots}</b>plots</span><span><b>${a.versions}</b>AN versions</span><span><b style="${a.pending ? 'color:var(--pending)' : ''}">${a.pending}</b>pending</span></div></div>`).join('');
-  return `<div class="pagehead"><div><h1>Analyses</h1><p>Your group's analyses. Each has its own workspace; pick one to continue or start a new one.</p></div>
-    <div class="actions"><button class="btn" data-act="demo">Create demo analysis</button><button class="btn primary" data-act="new-an">+ New analysis</button></div></div>
+  if (GHS.demo) return `<div class="pagehead"><div><h1>Public demo <span class="badge demo">DEMO</span></h1><p>Read-only examples you can click through. All numbers, plots and comments are invented for illustration. They are not CMS results and no analysis here was approved by anyone.</p></div>
+    <div class="actions"><button class="btn primary" data-act="new-an">+ New analysis</button></div></div><div class="acards">${cards}</div>`;
+  return `<div class="pagehead"><div><h1>My analyses</h1><p>Your group's analyses. Each has its own workspace; pick one to continue or start a new one.</p></div>
+    <div class="actions"><button class="btn" data-act="tryDemo">Public demo</button><button class="btn" data-act="demo">Create demo analysis</button><button class="btn primary" data-act="new-an">+ New analysis</button></div></div>
     ${AL.length ? `<div class="acards">${cards}</div>` : `<div class="card empty"><p style="margin:0 0 12px">You don't have any analyses yet.</p><button class="btn primary" data-act="new-an">+ Create your first analysis</button></div>`}`;
 }
 
@@ -828,7 +838,8 @@ function cadiModal() {
   try { sessionStorage.setItem('cadi-later-' + id, '1'); } catch {}
 }
 let cadiShown = false;
-function maybeCadi() {   // first time an analysis is opened (or until answered): ask once per browser session
+function maybeCadi() {
+  if (GHS.demo) return;   // first time an analysis is opened (or until answered): ask once per browser session
   const r = route(); if (r[0] !== 'a' || !S || cadiShown || document.querySelector('.overlay')) return;
   const st = cadiOf(S.an).status; if (st === 'yes' || st === 'no') return;
   try { if (sessionStorage.getItem('cadi-later-' + S.an.id)) return; } catch {}
@@ -889,6 +900,7 @@ function render() {
   if (r[0] === 'a' && S && r[2] === 'pdf') PDF.mountPdf();
   if (r[0] !== 'a') ui.who = {};
   if (!(r[0] === 'a' && S && TEAM.gate())) maybeCadi();
+  lockDemoButtons();
 }
 
 /* ============================ forms ============================ */
@@ -1319,6 +1331,10 @@ function importModal(mode) {
 const A = {
   menu: () => $('#side').classList.toggle('open'),
   theme: () => { const cur = document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); const n = cur === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = n; lsSet('at_theme', n); },
+  exitdemo: async () => { resetDemoView(); try { U = await ghRestore(); } catch { U = null; } if (U) await afterRepoChange(true); else showConnect(); },
+  login: () => loginModal(),
+  getStarted: () => loginModal(null, true),
+  tryDemo: async () => { try { U = await ghDemo(); await start(); await seedDemo(); } catch (e) { showConnect(e.message); } },
   logout: () => confirmBox('Disconnect', `Remove <b>${esc(GHS.repo)}</b> from this device? Your data stays safe in GitHub; you can reconnect any time with a token. Saved copies of AN PDFs on this device are deleted too.`, 'Disconnect', async () => {
     try { await PDF.clearAll(); } catch {} ghForget(); await afterRepoChange(); }),
   setrepo: async el => {
@@ -1521,11 +1537,12 @@ function drawPlot({title, xl, xr, nb, shape, N = 2e5, logy, ratio, labels, legen
   if (legend) { g.font = '15px sans-serif'; g.textAlign = 'left'; g.fillStyle = '#111'; g.beginPath(); g.arc(W - 220, T + 20, 4, 0, 7); g.fill(); g.fillText('Data', W - 205, T + 25); g.fillStyle = color + 'aa'; g.fillRect(W - 230, T + 38, 20, 12); g.fillStyle = '#111'; g.fillText('Simulation', W - 205, T + 49); }
   return new Promise(r => c.toBlob(b => r(new File([b], 'plot.png', {type: 'image/png'}))));
 }
+function resetDemoView() { ghForget(); U = null; S = null; AL = []; location.hash = ''; }
 let demoRunning = false;
 async function createDemo() {
   if (demoRunning) return; demoRunning = true;
   const hide = busy('Creating the demo analysis… this can take up to a minute on GitHub. Please wait.');
-  try { await createDemoInner(); }
+  try { const id = await createDemoInner(); toast('Demo analysis created'); go('#/a/' + id); }
   catch (e) { console.error(e); toast('Demo could not be created: ' + e.message, 'err', 20000); }
   finally { hide(); demoRunning = false; }
 }
@@ -1578,7 +1595,78 @@ async function createDemoInner() {
   await api('POST', ap('/documents'), {title: 'AN-24-123 v2 (PDF)', kind: 'AN draft', url: 'https://example.org/an-24-123-v2.pdf', an_version_id: st.an_versions[1].id, notes: 'Public version 2.'});
   await api('POST', ap('/documents'), {title: 'Analysis strategy', kind: 'Meeting notes', notes: 'Overall strategy agreed with the supervisor.'});
   });
-  toast('Demo analysis created'); go('#/a/' + newId);
+  return newId;
+}
+
+/* second sample analysis for the public demo: invented numbers, labelled as such */
+async function createHiggsDemo() {
+  return batch(async () => {
+    const aid = (await api('POST', '/analyses', {title: 'Demo · H→γγ Signal Strength', stage: 'an_stage', an_name: 'AN-00-000', collaboration: 'CMS', an_status: 'being_written'})).id;
+    const ap = p => `/analyses/${aid}${p}`, up = async o => (await api('POST', ap('/upload'), undefined, {raw: await drawPlot(o)})).file_id;
+    await api('POST', ap('/cadi'), {status: 'yes', line: 'DEMO-00-000 (illustrative)', url: ''});
+    const cat = (await api('POST', ap('/categories'), {name: 'Diphoton mass', parent_id: null})).id;
+    const mgg = x => Math.exp(-(x - 125) * (x - 125) / 8) + .6 * Math.exp(-(x - 100) / 30);
+    const P = {title: 'm(γγ), inclusive', xl: 'm(γγ) [GeV]', xr: [100, 160], shape: mgg};
+    const ds = 'Illustrative sample, not real data';
+    const p = await api('POST', ap('/plots'), {category_id: cat, name: 'Diphoton invariant mass', location: 'p. 21 · Fig 6.1', version: {file_id: await up({...P, nb: 30, seed: 11}), summary: 'First look', changes: 'Initial version.', dataset: ds}});
+    await api('POST', ap(`/plots/${p.id}/versions`), {file_id: await up({...P, nb: 60, labels: true, ratio: true, legend: true, prelim: true, seed: 12, color: '#0e7490'}), summary: 'Finer binning, ratio panel', changes: 'Rebinned 30 → 60 bins; added ratio panel and legend.', motivation: 'Convener asked to resolve the peak shape.', dataset: ds});
+    await api('POST', ap('/versions'), {number: 1, published_on: new Date(Date.now() - 6 * 864e5).toISOString().slice(0, 10), notes: 'Illustrative first AN version.'});
+    const st = await api('GET', ap(''));
+    const fig = st.usages.find(u => u.type === 'note' && u.an_version_id);
+    if (fig) {
+      const r = (await api('POST', ap(`/usages/${fig.id}/reviews`), {role: 'Reviewer 1', name: 'Example Reviewer', text: 'Please show the fit result overlaid on the mass distribution.'})).id;
+      await api('POST', ap(`/reviews/${r}/answer`), {answer: 'Will add the signal-plus-background fit in the next version.'});
+    }
+    return aid;
+  });
+}
+let seeding = false;
+async function seedDemo() {                       // build both samples, then lock the demo repository for writing
+  if (seeding) return; seeding = true;
+  const hide = busy('Preparing the demo…');
+  try { await createDemoInner(); await createHiggsDemo(); demoLock(); await loadList(); go('#/'); render(); }
+  catch (e) { console.error(e); toast('Demo could not be prepared: ' + e.message, 'err', 20000); }
+  finally { hide(); seeding = false; }
+}
+
+/* sign-in pop-up: shown when someone using the read-only demo (or the front page) wants to do something that needs an account */
+let clickAct = '';
+document.addEventListener('click', e => { const el = e.target.closest('[data-act]'); clickAct = el ? el.dataset.act : ''; }, true);
+function askLogin() { if (!document.querySelector('#loginov')) loginModal(clickAct === 'new-an' ? 'new-an' : null); }
+function loginModal(intent, setup) {
+  const saved = savedRepos();
+  const {m, f} = openModal({title: 'Sign in to Analysis Tracker', allowDemo: true, submit: 'Sign in', body: `
+    <div class="brand" style="margin-bottom:8px"><div class="logo">${logoSvg}</div>Analysis-Tracker</div>
+    <p class="sub" style="margin:0 0 10px">Sign in to create and manage analyses, upload plots, collaborate with reviewers, and maintain your analysis history. You can continue exploring the public demo without signing in.</p>
+    ${saved.length ? `<div class="chips" style="margin-bottom:8px">${saved.map(r => `<span class="chip" data-saved="${esc(r)}">${esc(r)}</span>`).join('')}</div>` : ''}
+    ${field('Data repository', `<input type="text" name="repo" required value="${esc((window.AT_CONFIG && window.AT_CONFIG.repo) || savedRepo())}" placeholder="owner/analysis-tracker-data" autocomplete="off" autocapitalize="off" spellcheck="false">`, 'Your private GitHub repository for this data.')}
+    ${field('GitHub access token', '<input type="password" name="token" required autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="github_pat_…">', 'Not your GitHub password. It is sent only to GitHub.')}
+    <label style="display:flex;gap:8px;align-items:center;font-size:13.5px"><input type="checkbox" name="remember" checked> Keep me connected on this device</label>
+    <details class="authswitch" ${setup ? 'open' : ''} style="text-align:left"><summary style="cursor:pointer">How do I set this up?</summary>
+      <p style="margin:8px 0 0">Analysis-Tracker has no server of its own. Your GitHub token is both your sign-in and the key to your private data repository, so the repository is needed from the start; it cannot be postponed.</p>
+      <ol style="padding-left:18px;margin:8px 0 0;line-height:1.7">
+        <li>On GitHub create a <b>private</b> repository, tick “Add a README file”.</li>
+        <li><b>Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token</b>.</li>
+        <li><b>Only select repositories</b> → that repository. Permissions → Repository → <b>Contents: Read and write</b>.</li>
+        <li>Paste the token above.</li></ol></details>`,
+    onSubmit: async fd => {
+      const wasDemo = demoLocked();
+      try { U = await ghConnect(fd.get('repo'), fd.get('token'), !!fd.get('remember')); }
+      catch (e) { if (wasDemo) U = await demoResume(); throw e; }
+      await afterRepoChange(true); if (intent === 'new-an') newAnalysisModal();
+    }});
+  m.id = 'loginov';
+  m.querySelectorAll('[data-saved]').forEach(c => c.onclick = async () => {
+    const wasDemo = demoLocked();
+    try { U = await ghSwitch(c.dataset.saved); m.remove(); await afterRepoChange(true); if (intent === 'new-an') newAnalysisModal(); } catch (ex) { if (wasDemo) U = await demoResume(); toast(ex.message, 'err'); }
+  });
+  const cancel = m.querySelector('footer [data-close]'); if (cancel) cancel.textContent = demoLocked() ? 'Keep exploring the demo' : 'Close';
+}
+/* small lock on the buttons of the read-only demo that would change something */
+const LOCKED = new Set('new-an add-anc add-figure add-mcomment add-mplot add-rv add-use bulk-plots import-email new-cat new-doc new-plot new-sub new-ver edit-an edit-anc edit-anv edit-cat edit-doc edit-plot edit-rv edit-use publish resolve resolve-anc reopen reopen-anc set-status link-comments reply-doc'.split(' '));
+function lockDemoButtons() {
+  if (!demoLocked()) return;
+  document.querySelectorAll('[data-act]').forEach(b => { if (LOCKED.has(b.dataset.act) && b.textContent.trim().length > 2 && !b.dataset.lk) { b.dataset.lk = 1; b.insertAdjacentHTML('afterbegin', '<span class="lk" aria-hidden="true">🔒</span>'); b.title = (b.title ? b.title + ' · ' : '') + 'Sign in to use this'; } });
 }
 
 /* ============================ boot ============================ */

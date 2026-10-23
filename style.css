@@ -472,3 +472,7 @@ details.resp>summary{cursor:pointer;padding:8px 12px;font-size:13px;font-weight:
 .rrev{margin-top:6px;font-size:12.5px}.rrev>summary{cursor:pointer;color:var(--mut)}.ract{display:flex;gap:6px;margin-top:8px}
 .badge.r-sel{background:color-mix(in srgb,var(--resolved,#2f9e44) 16%,transparent);color:var(--resolved,#2f9e44)}.badge.r-dis{background:color-mix(in srgb,var(--danger) 14%,transparent);color:var(--danger)}.badge.r-act,.badge.r-sup{background:var(--bg);color:var(--mut)}
 .who .btn,.ctxsel+.btn,#top .btn.sm{white-space:nowrap}
+.badge.demo{background:#fef3c7;color:#92400e;border:1px solid #f59e0b}
+.trydemo{margin-top:14px;text-align:center}.trydemo .btn{width:100%;padding:11px 14px;font-size:15px}.trydemo .hint{margin-top:6px}
+.ordiv{display:flex;align-items:center;gap:10px;margin:14px 0 2px;color:var(--muted);font-size:12.5px}.ordiv:before,.ordiv:after{content:"";flex:1;border-top:1px solid var(--line,#8884)}
+.lk{font-size:.78em;margin-right:5px;opacity:.75}

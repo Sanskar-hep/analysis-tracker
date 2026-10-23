@@ -40,6 +40,7 @@ the current repository from this device; your data stays in GitHub.
 The preview uses a fake in-memory GitHub, so data disappears when you stop it.
 
 ## How it behaves
+- **Public demo** – the front page has Explore Demo, Documentation, Login and Get Started. The demo is two read-only sample analyses (invented numbers, labelled DEMO) on an in-memory stand-in for GitHub (`demoFetch` in `backend.js`). Once built it refuses every write in the data layer, and the interface shows a 🔒 on editing buttons and a sign-in pop-up instead of forms. Signing in goes back to the action you wanted (e.g. New analysis).
 - Every save is one git commit in the data repo (history comes for free; you can revert in GitHub).
 - Everyone in the group sees all analyses. Only an analysis' owner can edit its settings or delete it; everyone can add
   plots and comments.
