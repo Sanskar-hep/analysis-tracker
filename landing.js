@@ -14,15 +14,28 @@ window.LANDING = (() => {
 
   const page = (connectCard, credit) => `<div class="landing">
   <header class="ltop"><a class="lbrand" href="#"><span class="logo">${window.__logo || ''}</span>Analysis-Tracker</a><span class="lby">by <a href="https://github.com/Sanskar-hep" target="_blank" rel="noopener noreferrer"><b>Sanskar Nanda</b></a></span>
-    <nav><a href="#lfeat">Features</a><a href="#ldocs">Documentation</a><a href="#lstate">Status</a><button class="btn sm" data-act="login">Login</button><button class="btn sm primary" data-act="tryDemo">Explore Demo</button></nav></header>
+    <nav><a href="#lfeat">Features</a><a href="#ldocs">Documentation</a><button class="btn sm" data-act="login">Login</button><button class="btn sm primary" data-act="tryDemo">Explore Demo</button></nav></header>
 
   <section class="lhero"><div class="lheadtxt">
     <p class="leyebrow">Analysis traceability for high-energy physics</p>
-    <h1>Know what changed in your analysis, why it changed, and what the reviewers said.</h1>
-    <p class="lsub">Analysis-Tracker keeps every plot version, convener comment and reply of an HEP analysis connected, from the first draft plot to the Analysis Note (AN) version that is under review. It is built around the CMS-style review cycle, not adapted from a general file store or task board.</p>
-    <p class="lwho"><b>Designed for</b> analysts, PhD students and analysis contacts who prepare AN versions and answer review comments. Anyone who needs to see how an analysis evolved can use the same records.</p>
-    <p class="lcta"><button class="btn primary" data-act="tryDemo">Explore Demo</button><button class="btn" data-act="getStarted">Get Started</button><button class="btn" data-act="login">Login</button><a class="btn" href="#lflow">See how it fits an analysis</a></p>
+    <h1>Never lose the story behind a physics result.</h1>
+    <p class="lsub">Every plot has a history. Every reviewer comment has a context. Every analysis decision has a reason.</p>
+    <p class="lsub"><b>Analysis-Tracker</b> brings your plots, version history, reviewer discussions and the reasons for each change together in one place, from the first draft to the final Analysis Note.</p>
+    <p class="lwho">Built for HEP analysis teams who need to understand not just <i>what changed</i>, but <i>why it changed, who changed it, and what still needs to be checked.</i></p>
+    <p class="lcta"><button class="btn primary" data-act="tryDemo">Explore the Demo →</button><a class="btn" href="#lflow">See How It Works</a></p>
+    <p class="lnote" style="margin-top:10px">No sign-in required to explore the demo.</p>
   </div><div id="connect" class="lconnect">${connectCard}</div></section>
+
+
+  <section class="lsec"><h2>More than plot storage</h2>
+    <div class="lgrid2">
+      ${card('Trace every change', 'Each plot keeps all its versions, with what changed, why, the dataset and a link to the code that made it. The activity log shows who did what and when.')}
+      ${card('Never lose review context', 'Comments, replies and reviewer decisions stay linked to the plot and version they discuss. Several people can answer one comment; the owner accepts or discards responses, with a reason, and nothing is deleted.')}
+      ${card('See what each plot is used for', 'Open a plot version to see the AN figures, meetings and comments tied to it, and a working draft that shows what is new, updated or unchanged before you publish.')}
+      ${card('Know what needs checking next', 'Open and unanswered comments, missing data-taking eras, and plots that changed since the last release are listed for you.')}
+    </div>
+    <p class="lnote">Built for high-energy physics. Designed around the analysis review workflow.</p>
+  </section>
 
   <section id="lwhy" class="lsec"><h2>The problem it solves</h2>
     <p class="lead">In a review round the same figure changes several times, and the discussion about it lives somewhere else.</p>
@@ -84,6 +97,8 @@ window.LANDING = (() => {
         ${li('CADI line status', 'asked once per analysis and stored per analysis')}
       </ul></div>
       <div><h3 class="plan">Not available yet</h3><ul>
+        ${li('Dependency tracing', 'automatically listing which results need revalidation after an upstream change is planned, not built')}
+        ${li('Validation evidence and configuration tracking', 'a plot version records its dataset and a code link; full configurations and validation records are not tracked')}
         ${li('Google Slides', 'putting plots into a presentation is planned, not built')}
         ${li('Direct push to Google Docs', 'today you open the exported file yourself')}
         ${li('Automatic ingestion from analysis workflows', 'plots are uploaded by you, singly or in bulk')}
