@@ -22,7 +22,10 @@ const upload = async file => (await api('POST', aurl('/upload'), undefined, {raw
 let U = null;          // connected GitHub user {id (login), name}
 let S = null;          // currently open analysis (normalised)
 let AL = [];           // list of the user's analyses
-const ui = {sel: {}, cmp: {}, mode: 'side', A: null, B: null, pf: 'all', ctx: {}};
+const ui = {sel: {}, cmp: {}, mode: 'side', A: null, B: null, pf: 'all', ctx: {}, who: {}};
+/* every change sent from here also says which team member made it (picked from the owner's list when the analysis was opened) */
+{ const api0 = window.api;
+  window.api = (m, p, b, o) => (m !== 'GET' && S && ui.who[S.an.id] && !(o && o.raw)) ? api0(m, p, {...(b || {}), _person: ui.who[S.an.id]}, o) : api0(m, p, b, o); }
 
 function norm(st) {
   return {
@@ -34,7 +37,7 @@ function norm(st) {
       reviews: u.reviews.map(r => ({...r, none: !!r.none, resolvedVersionId: r.resolved_version_id, resolvedMore: r.resolved_more || [], resolvedAt: r.resolved_at}))})),
     docs: st.documents.map(d => ({...d, anvId: d.an_version_id})),
     anc: (st.an_comments || []).map(c => ({...c, anvId: c.an_version_id, resolvedIn: c.resolved_in})),
-    srcMap: st.src_map || {},
+    srcMap: st.src_map || {}, audit: st.audit || [],
   };
 }
 async function loadAnalysis(id) { S = norm(await api('GET', `/analyses/${id}`)); }
@@ -215,11 +218,11 @@ const radios = (name, opts, cur) => `<div class="radios">${opts.map(([v, l]) => 
 
 /* ============================ connect to GitHub ============================ */
 function showConnect(msg = '') {
-  document.title = 'Analysis-Tracker';
+  document.title = 'Analysis-Tracker · analysis traceability for HEP';
   const cfgRepo = (window.AT_CONFIG && window.AT_CONFIG.repo) || savedRepo();
-  $('#root').innerHTML = `<div class="authwrap"><div class="card authcard" style="width:min(480px,100%)">
+  const cardHtml = `<div class="card authcard">
     <div class="brand"><div class="logo">${logoSvg}</div>Analysis-Tracker</div>
-    <h1>Connect to your data</h1>
+    <h2 class="connh">Connect to your data</h2>
     <div class="hint">Your analyses are stored in a private GitHub repository. Sign in with a personal access token; GitHub decides who can read and write.</div>
     ${savedRepos().length ? `<div style="margin-top:16px"><div class="l" style="font-weight:600;font-size:13px;margin-bottom:6px">Saved repositories</div><div class="chips">${savedRepos().map(r => `<span class="chip" data-saved="${esc(r)}">${esc(r)}</span>`).join('')}</div></div>` : ''}
     <form id="authform" novalidate>
@@ -237,7 +240,8 @@ function showConnect(msg = '') {
         <li><b>Only select repositories</b> → the data repository.</li>
         <li>Permissions → Repository → <b>Contents: Read and write</b>. Generate and paste it above.</li>
       </ol></details>
-  </div>${creditLine()}</div>`;
+  </div>`;
+  window.__logo = logoSvg; $('#root').innerHTML = LANDING.page(cardHtml, creditLine());
   const f = $('#authform');
   $('#showtok').onchange = e => { $('#tokinput').type = e.target.checked ? 'text' : 'password'; };
   document.querySelectorAll('[data-saved]').forEach(c => c.onclick = async () => {
@@ -317,6 +321,7 @@ function renderSide() {
       ${isAN() ? nav(L('/release'), 'Release &amp; Export', pg === 'release', 0, 'Check what is ready, then download the package') : ''}
       <div class="sec"><span>More</span></div>
       ${isAN() ? nav(L('/docs'), 'Documents', pg === 'docs') : ''}
+      ${nav(L('/activity'), 'Activity log', pg === 'activity', 0, 'Who did what, and when')}
       ${nav(L('/settings'), 'Settings', pg === 'settings')}
     </div>`;
 }
@@ -327,7 +332,7 @@ function renderTop() {
   const repos = savedRepos(), repoSel = `<div class="ctxsel" title="Data repository"><span>📁</span><select data-act="setrepo" aria-label="Data repository">
       ${repos.map(r => `<option value="${esc(r)}" ${r === GHS.repo ? 'selected' : ''}>${esc(r)}</option>`).join('')}
       <option value="__add">＋ Add another repository…</option></select></div>`;
-  const user = `${repoSel}<div class="who"><span title="Signed in to GitHub as ${esc(U.id)}">👤 ${esc(U.name)}</span><button class="btn sm" data-act="refresh" title="Load the latest changes from GitHub">↻</button><button class="btn sm" data-act="logout" title="Remove this repository from this device">Disconnect</button></div>`;
+  const user = `${repoSel}${S ? TEAM.chip() : ''}<div class="who"><span title="Signed in to GitHub as ${esc(U.id)}">👤 ${esc(U.name)}</span><button class="btn sm" data-act="refresh" title="Load the latest changes from GitHub">↻</button><button class="btn sm" data-act="logout" title="Remove this repository from this device">Disconnect</button></div>`;
   let mid = '';
   if (S) {
     const c = ctx();
@@ -542,7 +547,7 @@ function ancCard(c) {
   return `<div class="card ucard ${meet ? 'meeting' : 'note'}" id="c-${c.id}"><div class="rv" style="border-top:0"><div><div class="who">${c.kind && c.kind !== 'text' ? `<span class="badge">${COMMENT_KINDS[c.kind] || ''}</span> ` : ''}${c.location ? `<span class="badge stage">${esc(c.location)}</span> ` : ''}${esc(whoStr(c))} <span class="meta">· ${fmtDate(c.created)}</span></div>
       <div class="txt">${esc(c.text)}</div>${anchorLine(c, 'anc')}</div>
     <div class="ra"><span class="badge ${cls}">${label}</span>${res ? `<button class="btn sm" data-act="reopen-anc" data-id="${c.id}">Reopen</button>` : `<button class="btn sm primary" data-act="resolve-anc" data-id="${c.id}">Mark resolved</button>${statusBtn('anc', c)}<button class="btn sm" data-act="edit-anc" data-id="${c.id}">Edit</button>`}<button class="iconbtn" data-act="del-anc" data-id="${c.id}" title="Delete">🗑</button></div>
-    <div style="grid-column:1/-1">${ansBox('anc', c.id, c.answer)}</div>
+    <div style="grid-column:1/-1">${TEAM.block('anc', c)}</div>
     ${res ? `<div class="res">${c.resolvedIn && anv(c.resolvedIn) ? `Addressed in <b>${anvLabel(anv(c.resolvedIn))}</b><br>` : ''}${esc(c.resolution)}</div>` : ''}</div></div>`;
 }
 
@@ -656,7 +661,7 @@ function reviewRow(u, r, opts = {}) {
   return `<div class="rv"><div><div class="who">${target}${esc(whoStr(r))} <span class="meta">· ${fmtDate(r.created)}</span></div>
     ${r.none ? '<div class="txt none">No comments so far</div>' : `<div class="txt">${esc(r.text)}</div>`}${r.none ? '' : anchorLine(r, 'rev')}</div>
     <div class="ra">${r.none ? '' : `<span class="badge ${cls}">${label}</span>`}${act}<button class="iconbtn" data-act="del-rv" data-id="${r.id}" title="Delete">🗑</button></div>
-    ${r.none ? '' : `<div style="grid-column:1/-1">${ansBox('rev', r.id, r.answer)}</div>`}
+    ${r.none ? '' : `<div style="grid-column:1/-1">${TEAM.block('rev', r)}</div>`}
     ${r.status === 'resolved' && !r.none ? `<div class="res">${vers.length ? `Updated plot${vers.length > 1 ? 's' : ''} saved as ${vers.map(rv => `<a href="${L('/plot/' + rv.plotId)}" data-act="selver" data-id="${rv.id}"><b>${verLabel(rv)}</b></a> <span class="meta">${esc(plot(rv.plotId).name)}</span> ${ctxChip(rv.anvId)}`).join(', ')}<br><span class="mono">${vers.map(rv => esc(rv.fileName)).join(' · ')}</span><br>` : ''}${vers.length ? '' : esc(r.resolution || '')}${vers.length ? revNotes(r).map(n => `<div class="meta"><b>${esc(n.name)}</b> — changed: ${esc(n.what)}${n.why ? `<br>Why: ${esc(n.why)}` : ''}</div>`).join('') : ''}${addMore}</div>` : ''}</div>`;
 }
 /* a figure of the AN with all its plots (panels) and every comment about it */
@@ -799,7 +804,7 @@ function viewSettings() {
       <button class="btn" data-act="export">Export backup (JSON)</button></div>
     ${a.stage === 'just_started' ? '<div class="note-box">At the AN stage you add the AN name and collaboration, and can publish AN versions. Reviewer comments appear once the first version is published.</div>' : ''}
     ${a.owner === U.id ? '<div class="danger-zone"><h3>Delete this analysis</h3><p class="meta">Removes all of its plots, comments, versions and documents from the repository (they remain in git history).</p><button class="btn danger" data-act="del-an">Delete analysis…</button></div>' : '<div class="note-box">Only the owner can edit the analysis settings or delete it. Everyone in the group can add plots and comments.</div>'}
-  </div>`;
+  </div>${TEAM.settingsCard()}`;
 }
 const cadiText = a => { const c = cadiOf(a);
   if (c.status === 'yes') return `${cadiBadge(a)} ${c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener noreferrer">${esc(c.line || c.url)}</a>` : esc(c.line || 'line not entered yet')}`;
@@ -871,6 +876,7 @@ function render() {
     else if (s[0] === 'versions') h = viewVersions();
     else if (s[0] === 'docs') h = viewDocs();
     else if (s[0] === 'settings') h = viewSettings();
+    else if (s[0] === 'activity') h = TEAM.view();
     else if (s[0] === 'pdf') h = PDF.viewPdf(s[1]);
     else if (s[0] === 'release') h = REL.view();
     else if (s[0] === 'compare-an') h = ANC.view();
@@ -881,7 +887,8 @@ function render() {
   hydrateImages();
   if (r[0] === 'a' && S && r[2] === 'compare-an') ANC.refreshHave();
   if (r[0] === 'a' && S && r[2] === 'pdf') PDF.mountPdf();
-  maybeCadi();
+  if (r[0] !== 'a') ui.who = {};
+  if (!(r[0] === 'a' && S && TEAM.gate())) maybeCadi();
 }
 
 /* ============================ forms ============================ */
@@ -1425,7 +1432,7 @@ const A = {
   rel: el => REL.act(el),
   gal: el => GAL.act(el),
   anc: el => ANC.act(el),
-  anf: el => ANF.act(el),
+  anf: el => ANF.act(el), team: el => TEAM.act(el),
   'show-summary': el => REL.showVersionSummary(el.dataset.id),
   'more-plot': el => { const f = findReview(el.dataset.id); resolveModal(f.u, f.r, true); },
   'add-figure': () => figureBuilderModal(),
@@ -1460,9 +1467,10 @@ document.addEventListener('change', async e => {     // "Your answer" boxes save
   const kind = t.dataset.kind, id = t.dataset.id, val = t.value.trim(), saved = t.parentElement.querySelector('.saved');
   try {
     await api('POST', aurl(`/${kind === 'anc' ? 'an-comments' : 'reviews'}/${id}/answer`), {answer: val});
-    const item = kind === 'anc' ? S.anc.find(c => c.id === id) : findReview(id)?.r; if (item) { item.answer = val; }
-    const badge = t.closest('.rv')?.querySelector('.ra .badge');
-    if (badge && item && item.status !== 'resolved') { const [cls, label] = stateOf(item.status, val); badge.className = 'badge ' + cls; badge.textContent = label; }
+    await loadAnalysis(S.an.id);
+    if (!(document.activeElement && document.activeElement.matches('textarea.ans'))) render();   // refresh the history, unless you moved on to another answer box
+    else { const item = kind === 'anc' ? S.anc.find(c => c.id === id) : findReview(id)?.r, badge = t.closest('.rv')?.querySelector('.ra .badge');
+      if (badge && item && item.status !== 'resolved') { const [cls, label] = stateOf(item.status, item.answer); badge.className = 'badge ' + cls; badge.textContent = label; } }
     saved.textContent = 'Saved ✓'; setTimeout(() => { saved.textContent = ''; }, 2000);
   } catch (err) { saved.textContent = ''; toast(err.message, 'err'); }
 });

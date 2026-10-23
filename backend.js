@@ -88,10 +88,17 @@ async function getState(aid, head) {
   const t = await readText(statePath(aid), head); if (t === null) return null;
   const st = JSON.parse(t); migrate(st); STATE_CACHE.set(aid, {head, st}); return st;
 }
+function liftResp(st, c) {
+  c.responses = c.responses || []; c.history = c.history || [];
+  if (!c.responses.length && (c.answer || '').trim() && st.analysis) c.responses.push({id: c.id, person: st.analysis.owner_name || st.analysis.owner, login: st.analysis.owner, text: c.answer, at: c.created || 0, status: 'active', revisions: [], events: [], earlier: true});
+  if (c.responses.length) syncAnswer(c);
+}
 function migrate(st) {                                    // older files get the newer fields
-  st.an_comments = st.an_comments || [];
+  st.an_comments = st.an_comments || []; st.audit = st.audit || []; st.analysis && (st.analysis.team = st.analysis.team || []);
   st.an_comments.forEach(c => { c.source = c.source || 'an'; c.kind = c.kind || 'text'; c.answer = c.answer || ''; c.meeting = c.meeting || ''; c.meeting_date = c.meeting_date || ''; if (c.anchor === undefined) c.anchor = null; });
   st.usages.forEach(u => { u.panel = u.panel || ''; u.reviews.forEach(r => { r.answer = r.answer || ''; if (r.anchor === undefined) r.anchor = null; r.scope = r.scope || 'panel'; r.resolved_more = r.resolved_more || []; }); });
+  /* every comment keeps a list of responses; an answer written before this existed becomes the first one (same id as the comment) */
+  st.an_comments.forEach(c => liftResp(st, c)); st.usages.forEach(u => u.reviews.forEach(r => liftResp(st, r)));
   st.an_versions.forEach(v => { if (v.pdf === undefined) v.pdf = null; v.change_summary = v.change_summary || ''; });
   st.categories.forEach(c => { if (c.parent_id === undefined) c.parent_id = null; });
   st.plots.forEach(p => { p.location = p.location || ''; p.era = p.era || ''; });
@@ -103,7 +110,7 @@ function migrate(st) {                                    // older files get the
   if (st.analysis && st.analysis.presented === undefined) st.analysis.presented = false;
   return st;
 }
-const newState = () => ({format: 2, analysis: null, an_versions: [], categories: [], plots: [], plot_versions: [], usages: [], documents: [], files: [], an_comments: [], src_map: {}, working: {name: '', entries: [], summary_md: null}});
+const newState = () => ({format: 2, analysis: null, an_versions: [], categories: [], plots: [], plot_versions: [], usages: [], documents: [], files: [], an_comments: [], src_map: {}, audit: [], working: {name: '', entries: [], summary_md: null}});
 
 /* One atomic commit: blobs -> tree -> commit -> fast-forward the branch. Throws {conflict:true} if someone pushed meanwhile. */
 async function commit(head, changes, message) {
@@ -289,7 +296,68 @@ async function listAnalyses() {
 const clone = x => structuredClone(x);
 const isOwner = st => st.analysis.owner === ME().id;
 
+/* ---- who is acting, responses to comments, and the activity log ----
+   The person is picked from the owner's team list in the browser; the GitHub account that saved the change is always recorded as well. */
+function syncAnswer(c) {            // c.answer = what the rest of the site shows as "the answer": the selected responses, else the newest active one
+  const rs = (c.responses || []).filter(r => (r.text || '').trim()), sel = rs.filter(r => r.status === 'selected'), act = rs.filter(r => r.status === 'active');
+  c.answer = sel.length ? sel.map(r => r.text.trim()).join('\n\n') : act.length ? act[act.length - 1].text.trim() : '';
+}
+function personOf(st, b, strict = true) {
+  const names = (st.analysis.team || []).map(t => t.name), p = typeof b._person === 'string' ? b._person.trim() : '';
+  if (!names.length) return ME().name;
+  if (names.includes(p) || (p && p === st.analysis.owner_name && isOwner(st))) return p;
+  if (strict) throw E(403, 'Choose who you are first. The people allowed to answer comments and add plots are listed by the analysis owner.');
+  return ME().name;
+}
+function audit(st, action, o = {}) {
+  (st.audit = st.audit || []).push({id: nid(), at: now(), actor: ME().id, person: o.person || ME().name, action, target: o.target || '', detail: String(o.detail || '').slice(0, 300), reason: String(o.reason || '').slice(0, 1000)});
+}
+function findComment(st, id) {
+  let c = null; for (const u of st.usages) { const r = u.reviews.find(x => x.id === id && !x.none); if (r) { c = r; break; } }
+  c = c || byId(st.an_comments, id, 'Comment'); liftResp(st, c); return c;
+}
+const cmtLabel = c => (c.location || (c.role ? c.role + (c.name ? ' · ' + c.name : '') : 'Comment')) + ': ' + String(c.text || '').slice(0, 60);
+function archiveResolution(st, c, person) {       // reopening keeps what the earlier resolution was
+  if (c.status !== 'resolved') return;
+  c.history.push({resolution: c.resolution || '', resolved_in: c.resolved_in || null, resolved_version_id: c.resolved_version_id || null, resolved_more: c.resolved_more || [], resolved_at: c.resolved_at || null, reopened_at: now(), reopened_by: person});
+  c.responses.forEach(r => { if (r.status === 'selected') { r.status = 'superseded'; r.events.push({at: now(), by: person, action: 'superseded', reason: 'The comment was reopened'}); } });
+  syncAnswer(c); audit(st, 'comment_reopened', {person, target: c.id, detail: cmtLabel(c)});
+}
+const setMyResponse = ({aid, id}, b) => tx(aid, st => {
+  const c = findComment(st, id), person = personOf(st, b), text = sv(b, 'answer', 5000);
+  const mine = [...c.responses].reverse().find(r => r.person === person && (r.status === 'active' || r.status === 'selected'));
+  if (mine) {
+    if (mine.text !== text) { mine.revisions.push({text: mine.text, at: mine.edited_at || mine.at, by: mine.edited_by || mine.login}); mine.text = text; mine.edited_at = now(); mine.edited_by = ME().id; audit(st, 'response_edited', {person, target: c.id, detail: cmtLabel(c)}); }
+  } else if (text) {
+    c.responses.push({id: nid(), person, login: ME().id, text, at: now(), status: 'active', revisions: [], events: []}); audit(st, 'response_added', {person, target: c.id, detail: cmtLabel(c)});
+  }
+  syncAnswer(c); return {ok: true};
+}, {message: 'Write answer'});
+
 const H = {
+  /* the people the owner allows to answer comments and add plots (chosen from a list when the analysis is opened) */
+  setTeam: ({aid}, b) => tx(aid, st => {
+    if (!isOwner(st)) throw E(403, 'Only the owner can change the team list');
+    const raw = Array.isArray(b.names) ? b.names : []; if (raw.length > 60) throw E(400, 'The list is limited to 60 names');
+    const seen = new Set(), old = st.analysis.team || [], next = [];
+    for (const n0 of raw) { const n = String(n0 ?? '').trim(); if (!n) continue; if (n.length > 60) throw E(400, 'A name is too long (max 60)'); const k = n.toLowerCase(); if (seen.has(k)) continue; seen.add(k);
+      next.push(old.find(t => t.name === n) || {name: n, added_at: now(), added_by: ME().id}); }
+    const add = next.filter(n => !old.some(o => o.name === n.name)).map(n => n.name), del = old.filter(o => !next.some(n => n.name === o.name)).map(o => o.name);
+    st.analysis.team = next; if (add.length || del.length) audit(st, 'team_changed', {detail: [add.length ? 'added ' + add.join(', ') : '', del.length ? 'removed ' + del.join(', ') : ''].filter(Boolean).join('; ')});
+    return {ok: true};
+  }, {message: 'Edit team list'}),
+  /* the owner decides which responses to keep: select (several allowed), discard (reason required), restore. Nothing is ever deleted. */
+  decideResponse: ({aid, id, rid}, b) => tx(aid, st => {
+    if (!isOwner(st)) throw E(403, 'Only the analysis owner can select or discard responses');
+    const c = findComment(st, id), r = byId(c.responses, rid, 'Response'), act = sv(b, 'action', 10, true), person = personOf(st, b), reason = sv(b, 'reason', 1000, act === 'discard');
+    if (act === 'select') { if (r.status === 'discarded') throw E(400, 'Restore the response first'); r.status = 'selected'; }
+    else if (act === 'unselect') { if (r.status !== 'selected') throw E(400, 'This response is not selected'); r.status = 'active'; }
+    else if (act === 'discard') { if (r.status === 'discarded') throw E(400, 'Already discarded'); r.status = 'discarded'; }
+    else if (act === 'restore') { if (r.status !== 'discarded') throw E(400, 'This response is not discarded'); r.status = 'active'; }
+    else throw E(400, 'Unknown action');
+    r.events.push({at: now(), by: person, action: act, reason}); syncAnswer(c);
+    audit(st, 'response_' + act, {person, target: c.id, detail: `${r.person}'s response · ${cmtLabel(c)}`, reason}); return {ok: true};
+  }, {message: 'Review a response'}),
   me: async () => ({user: ME()}),
   logout: async () => { ghForget(); return {ok: true}; },
   list: async () => ({analyses: await listAnalyses()}),
@@ -305,7 +373,7 @@ const H = {
     }
     const aid = nid();
     await tx(aid, st => {
-      st.analysis = {id: aid, title, ...f, owner: ME().id, owner_name: ME().name, presented: false, created: now()};
+      st.analysis = {id: aid, title, ...f, owner: ME().id, owner_name: ME().name, presented: false, team: [], created: now()};
       if (first) st.an_versions.push({id: nid(), analysis_id: aid, number: first.num, published_on: first.on, notes: first.notes, pdf: first.pdf, status: 'published', created: now()});
     }, {create: true, message: `Create analysis "${title}"`});
     return {id: aid};
@@ -493,10 +561,11 @@ const H = {
     return {file_id: fid, ext};
   },
   createPlot: ({aid}, b) => tx(aid, (st, io) => {
+    const person = personOf(st, b);
     const cat = byId(st.categories, sv(b, 'category_id', 40, true), 'Category'), name = sv(b, 'name', 150, true);
     if (st.plots.some(p => p.category_id === cat.id && p.name === name)) throw E(409, 'A plot with this name already exists in that category');
     const p = {id: nid(), analysis_id: st.analysis.id, category_id: cat.id, name, location: sv(b, 'location', 200), era: sv(b, 'era', 40), created: now()}; st.plots.push(p);
-    const vid = makeVersion(st, io, p.id, b.version || {});
+    const vid = makeVersion(st, io, p.id, b.version || {}); st.plot_versions.find(v => v.id === vid).person = person; audit(st, 'plot_added', {person, target: p.id, detail: p.name});
     if (b.an_version_id) { const av = byId(st.an_versions, sv(b, 'an_version_id', 40, true), 'AN version'); st.plot_versions.find(v => v.id === vid).an_version_id = av.id; }   // plot of an already published AN version (first version only)
     return {id: p.id, version_id: vid};
   }, {message: 'Add plot'}),
@@ -505,7 +574,10 @@ const H = {
     if (st.plots.some(x => x.id !== p.id && x.category_id === cid && x.name === name)) throw E(409, 'A plot with this name already exists in that category');
     p.name = name; p.category_id = cid; if (b.location !== undefined) p.location = sv(b, 'location', 200); if (b.era !== undefined) p.era = sv(b, 'era', 40); return {ok: true};
   }, {message: 'Edit plot details'}),
-  createVersion: ({aid, pid}, b) => tx(aid, (st, io) => { byId(st.plots, pid, 'Plot'); return {id: makeVersion(st, io, pid, b)}; }, {message: 'Save new plot version'}),
+  createVersion: ({aid, pid}, b) => tx(aid, (st, io) => {
+    const pl = byId(st.plots, pid, 'Plot'), person = personOf(st, b), id = makeVersion(st, io, pid, b);
+    st.plot_versions.find(v => v.id === id).person = person; audit(st, 'plot_version_added', {person, target: pid, detail: pl.name}); return {id};
+  }, {message: 'Save new plot version'}),
   /* the analyst's own check of a revised plot (separate from the comment being resolved) */
   setVersionReviewed: ({aid, id}, b) => tx(aid, st => { const v = byId(st.plot_versions, id, 'Version'); v.reviewed = !!b.reviewed; v.reviewed_at = v.reviewed ? now() : null; v.reviewed_by = v.reviewed ? ME().name : ''; return {ok: true}; }, {message: 'Mark plot revision as reviewed'}),
   deleteVersion: ({aid, id}) => tx(aid, (st, io) => {
@@ -547,7 +619,7 @@ const H = {
   updateReview: ({aid, id}, b) => tx(aid, st => {
     const rv = findReview(st, id), {f, st: s0} = reviewFields(b); let s = f.none ? 'pending' : s0;
     if (s === 'resolved' && rv.status !== 'resolved') throw E(400, 'Use the resolve action to mark feedback as resolved');
-    if (s !== 'resolved' && rv.status === 'resolved') rv.resolved_at = null;
+    liftResp(st, rv); if (s !== 'resolved' && rv.status === 'resolved') { archiveResolution(st, rv, personOf(st, b, false)); rv.resolved_at = null; }
     Object.assign(rv, f, {status: s, resolved_version_id: s === 'resolved' ? rv.resolved_version_id : null}); return {ok: true};
   }, {message: 'Edit feedback'}),
   setReviewStatus: ({aid, id}, b) => tx(aid, st => {
@@ -563,7 +635,7 @@ const H = {
     const u = st.usages.find(x => x.id === rv.usage_id); u.reviews = u.reviews.filter(x => x.id !== rv.id); return {ok: true};
   }, {message: 'Delete feedback'}),
   resolveReview: ({aid, id}, b) => tx(aid, (st, io) => {
-    const rv = findReview(st, id); if (rv.none) throw E(400, 'There is no comment to resolve');
+    const rv = findReview(st, id), person = personOf(st, b); if (rv.none) throw E(400, 'There is no comment to resolve'); liftResp(st, rv);
     const own = st.usages.find(x => x.id === rv.usage_id), mode = sv(b, 'mode', 10, true), more = !!b.add;
     if (more && rv.status !== 'resolved') throw E(400, 'Resolve the comment first');
     if (mode === 'plot') {
@@ -578,14 +650,19 @@ const H = {
       else Object.assign(rv, {status: 'resolved', resolved_version_id: vid, resolution: changes, resolved_at: now()});
     } else if (mode === 'noplot') Object.assign(rv, {status: 'resolved', resolved_version_id: null, resolution: sv(b, 'note', 3000, true), resolved_at: now()});
     else throw E(400, 'Invalid mode');
+    if (mode === 'plot') { const nv = st.plot_versions[st.plot_versions.length - 1]; if (nv) nv.person = person; }
+    audit(st, 'comment_resolved', {person, target: rv.id, detail: cmtLabel(rv)});
     return {ok: true};
   }, {message: 'Resolve feedback'}),
 
   /* answer a comment with one or more revised plots: each replaces the plot in the working version (older versions stay in its history) */
   reviseReview: ({aid, id}, b) => tx(aid, (st, io) => {
-    const rv = findReview(st, id); if (rv.none) throw E(400, 'There is no comment to resolve');
+    const rv = findComment(st, id), person = personOf(st, b); if (rv.none) throw E(400, 'There is no comment to resolve');
     const items = Array.isArray(b.items) ? b.items : []; if (!items.length) throw E(400, 'Add at least one revised plot'); if (items.length > 40) throw E(400, 'Too many plots at once (max 40)');
-    if (b.answer !== undefined) rv.answer = sv(b, 'answer', 5000);
+    if (b.answer !== undefined) { const t = sv(b, 'answer', 5000), mine = [...rv.responses].reverse().find(x => x.person === person && (x.status === 'active' || x.status === 'selected'));
+      if (mine) { if (mine.text !== t) { mine.revisions.push({text: mine.text, at: mine.edited_at || mine.at, by: mine.edited_by || mine.login}); mine.text = t; mine.edited_at = now(); mine.edited_by = ME().id; } }
+      else if (t) rv.responses.push({id: nid(), person, login: ME().id, text: t, at: now(), status: 'active', revisions: [], events: []});
+      syncAnswer(rv); }
     const seen = new Set(), vids = [], lines = [];
     for (const it of items) {
       const p = byId(st.plots, sv(it, 'plot_id', 40, true), 'Plot'); if (seen.has(p.id)) throw E(400, 'Two revised files are for the same plot'); seen.add(p.id);
@@ -595,7 +672,7 @@ const H = {
         motivation: why || `Response to ${rv.role}${rv.name ? ' · ' + rv.name : ''}: ${rv.text}`.slice(0, 3000), dataset: prev.dataset, code: prev.code}, prev, rv.id, sv(it, 'file_name', 150) || null));
       lines.push(`${p.name}: ${changes}`);
     }
-    const was = rv.status === 'resolved';
+    const was = rv.status === 'resolved'; vids.forEach(v => { st.plot_versions.find(x => x.id === v).person = person; }); audit(st, 'plots_revised', {person, target: rv.id, detail: lines.join('; ')});
     vids.forEach(v => { if (!rv.resolved_version_id) rv.resolved_version_id = v; else rv.resolved_more.push(v); });
     rv.resolution = (was ? rv.resolution + '\n' : '') + lines.join('\n'); rv.resolution = rv.resolution.trim();
     if (!was) { rv.status = 'resolved'; rv.resolved_at = now(); }
@@ -611,7 +688,7 @@ const H = {
     st.an_comments.push(c); return {id: c.id};
   }, {message: 'Add AN comment'}),
   updateAnComment: ({aid, id}, b) => tx(aid, st => { const c = byId(st.an_comments, id, 'Comment'); Object.assign(c, anCommentFields(b, c.source)); return {ok: true}; }, {message: 'Edit comment'}),
-  answerAnComment: ({aid, id}, b) => tx(aid, st => { byId(st.an_comments, id, 'Comment').answer = sv(b, 'answer', 5000); return {ok: true}; }, {message: 'Write answer'}),
+  answerAnComment: setMyResponse,
   /* which file of the LaTeX source belongs to which plot (remembered for the next AN version) */
   setSourceMap: ({aid}, b) => tx(aid, st => {
     const m = b.map && typeof b.map === 'object' ? b.map : {}, ids = new Set(st.plots.map(p => p.id)); st.src_map = st.src_map || {};
@@ -619,21 +696,21 @@ const H = {
     const keys = Object.keys(st.src_map); if (keys.length > 3000) throw E(400, 'Too many remembered source files (limit 3000)');
     return {ok: true, count: keys.length};
   }, {message: 'Remember which source files belong to which plots'}),
-  answerReview: ({aid, id}, b) => tx(aid, st => { findReview(st, id).answer = sv(b, 'answer', 5000); return {ok: true}; }, {message: 'Write answer'}),
+  answerReview: setMyResponse,
   anchorAnComment: ({aid, id}, b) => tx(aid, st => { byId(st.an_comments, id, 'Comment').anchor = anchorOk(b.anchor); return {ok: true}; }, {message: 'Place comment in the PDF'}),
   anchorReview: ({aid, id}, b) => tx(aid, st => { findReview(st, id).anchor = anchorOk(b.anchor); return {ok: true}; }, {message: 'Place comment in the PDF'}),
   resolveAnComment: ({aid, id}, b) => tx(aid, st => {
     const c = byId(st.an_comments, id, 'Comment'), note = sv(b, 'note', 3000, true), rin = b.resolved_in ? byId(st.an_versions, b.resolved_in, 'AN version').id : null;
-    Object.assign(c, {status: 'resolved', resolution: note, resolved_in: rin, resolved_at: now()}); return {ok: true};
+    Object.assign(c, {status: 'resolved', resolution: note, resolved_in: rin, resolved_at: now()}); audit(st, 'comment_resolved', {person: personOf(st, b, false), target: c.id, detail: cmtLabel(c)}); return {ok: true};
   }, {message: 'Resolve AN comment'}),
-  reopenAnComment: ({aid, id}) => tx(aid, st => { Object.assign(byId(st.an_comments, id, 'Comment'), {status: 'pending', resolution: '', resolved_in: null, resolved_at: null}); return {ok: true}; }, {message: 'Reopen AN comment'}),
+  reopenAnComment: ({aid, id}, b) => tx(aid, st => { const c = findComment(st, id); archiveResolution(st, c, personOf(st, b, false)); Object.assign(c, {status: 'pending', resolution: '', resolved_in: null, resolved_at: null}); return {ok: true}; }, {message: 'Reopen AN comment'}),
   /* a comment that was recorded as plain AN text turns out to be about a figure: move it onto that figure (nothing is lost) */
   anCommentToFigure: ({aid, id}, b) => tx(aid, st => {
     const c = byId(st.an_comments, id, 'Comment'), u = byId(st.usages, sv(b, 'usage_id', 40, true), 'Record');
     if (c.source !== 'an') throw E(400, 'Only comments on the AN can be moved onto a figure');
     if (u.type !== 'note' || (u.an_version_id || null) !== (c.an_version_id || null)) throw E(400, 'That figure belongs to a different AN version');
     const loc = c.location || '';
-    u.reviews.push({id: nid(), analysis_id: st.analysis.id, usage_id: u.id, role: c.role, name: c.name, none: false, text: loc && !/^fig/i.test(loc) ? `${loc}: ${c.text}` : c.text, answer: c.answer || '', anchor: c.anchor || null,
+    u.reviews.push({id: nid(), analysis_id: st.analysis.id, usage_id: u.id, role: c.role, name: c.name, none: false, text: loc && !/^fig/i.test(loc) ? `${loc}: ${c.text}` : c.text, answer: c.answer || '', responses: c.responses || [], history: c.history || [], anchor: c.anchor || null,
       scope: b.scope === 'figure' ? 'figure' : 'panel', resolved_more: [], status: c.status || 'pending', resolved_version_id: null, resolution: c.resolution || '', resolved_at: c.resolved_at || null, created: c.created});
     st.an_comments = st.an_comments.filter(x => x.id !== c.id); return {ok: true};
   }, {message: 'Attach comment to a figure'}),
@@ -644,6 +721,7 @@ const H = {
     st.usages.filter(u => scope === 'an' ? (u.type === 'note' && u.an_version_id === ver.id) : u.type !== 'note').forEach(u => { u.reviews.forEach(r => ids.add(r.id)); nR += u.reviews.filter(r => !r.none).length; u.reviews = []; });
     const before = st.an_comments.length; st.an_comments = st.an_comments.filter(c => !(scope === 'an' ? (c.source === 'an' && c.an_version_id === ver.id) : c.source === 'meeting'));
     st.plot_versions.forEach(v => { if (v.review_id && ids.has(v.review_id)) v.review_id = null; });
+    audit(st, 'comments_deleted', {person: personOf(st, b, false), detail: `${nR + before - st.an_comments.length} comment(s), scope ${scope}`});
     return {reviews: nR, comments: before - st.an_comments.length};
   }, {message: 'Delete all comments'}),
   deleteAnComment: ({aid, id}) => tx(aid, st => { byId(st.an_comments, id, 'Comment'); st.an_comments = st.an_comments.filter(c => c.id !== id); return {ok: true}; }, {message: 'Delete AN comment'}),
@@ -767,7 +845,7 @@ const ROUTES = [
   R('POST', A_ + '\\/versions$', H.publish), R('PATCH', A_ + `\\/versions\\/(?<id>${ID})$`, H.updateVersion),
   R('POST', A_ + `\\/versions\\/(?<id>${ID})\\/pdf$`, H.setVersionPdf), R('DELETE', A_ + `\\/versions\\/(?<id>${ID})\\/pdf$`, H.removeVersionPdf),
   R('POST', A_ + '\\/categories$', H.createCategory), R('PATCH', A_ + `\\/categories\\/(?<id>${ID})$`, H.updateCategory),
-  R('PATCH', A_ + `\\/plots\\/(?<id>${ID})$`, H.updatePlot), R('POST', A_ + '\\/source-map$', H.setSourceMap), R('POST', A_ + '\\/cadi$', H.setCadi), R('POST', A_ + '\\/working\\/pdf$', H.setWorkingPdf), R('DELETE', A_ + '\\/working\\/pdf$', H.removeWorkingPdf), R('POST', A_ + `\\/versions\\/(?<id>${ID})\\/changes$`, H.setVersionChanges), R('POST', A_ + '\\/working$', H.updateWorking), R('POST', A_ + '\\/working\\/entries$', H.addWorkingEntry), R('DELETE', A_ + `\\/working\\/entries\\/(?<id>${ID})$`, H.deleteWorkingEntry),
+  R('PATCH', A_ + `\\/plots\\/(?<id>${ID})$`, H.updatePlot), R('POST', A_ + '\\/source-map$', H.setSourceMap), R('POST', A_ + '\\/cadi$', H.setCadi), R('POST', A_ + '\\/team$', H.setTeam), R('POST', A_ + `\\/comments\\/(?<id>${ID})\\/responses\\/(?<rid>${ID})\\/decide$`, H.decideResponse), R('POST', A_ + '\\/working\\/pdf$', H.setWorkingPdf), R('DELETE', A_ + '\\/working\\/pdf$', H.removeWorkingPdf), R('POST', A_ + `\\/versions\\/(?<id>${ID})\\/changes$`, H.setVersionChanges), R('POST', A_ + '\\/working$', H.updateWorking), R('POST', A_ + '\\/working\\/entries$', H.addWorkingEntry), R('DELETE', A_ + `\\/working\\/entries\\/(?<id>${ID})$`, H.deleteWorkingEntry),
   R('POST', A_ + `\\/reviews\\/(?<id>${ID})\\/status$`, H.setReviewStatus), R('POST', A_ + `\\/an-comments\\/(?<id>${ID})\\/status$`, H.setAnCommentStatus), R('DELETE', A_ + `\\/categories\\/(?<id>${ID})$`, H.deleteCategory),
   R('POST', A_ + '\\/upload$', H.upload),
   R('POST', A_ + '\\/plots$', H.createPlot), R('DELETE', A_ + `\\/plots\\/(?<id>${ID})$`, H.deletePlot),
