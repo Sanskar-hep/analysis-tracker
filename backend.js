@@ -880,9 +880,68 @@ function purgeVersions(st, io, ids) {
 }
 
 /* ============================ router: same routes the UI used with the server ============================ */
+
+/* ============================ presentations (Meeting Slides) ============================ */
+/* presentations/<id>/deck.json and presentations/<id>/files/<fid>.<ext> live beside the analyses; they belong to the repository, not to one analysis */
+const DECK_ID = '[0-9a-f]{8,20}';
+const deckPath = id => `presentations/${id}/deck.json`;
+const deckInfo = k => ({id: k.id, title: k.title, meeting_type: k.meetingType, theme: k.theme, slides: (k.slides || []).length, updated: k.updated || 0, by: k.by || '', analysis: k.analysisName || '', source_aid: k.sourceAid || null});
+const DECK_CACHE = new Map();             // id -> {head, deck}
+async function readDeck(id, head) {
+  const c = DECK_CACHE.get(id); if (c && c.head === head) return c.deck;
+  const t = await readText(deckPath(id), head); if (t === null) return null;
+  const k = JSON.parse(t); DECK_CACHE.set(id, {head, deck: k}); return k;
+}
+async function listDecks() {
+  const head = await getHead(), dirs = (await listDir('presentations', head)).filter(d => d.type === 'dir' && new RegExp('^' + DECK_ID + '$').test(d.name));
+  const all = await pmap(dirs, async d => { try { const k = await readDeck(d.name, head); return k ? deckInfo(k) : null; } catch { return null; } });
+  return {presentations: all.filter(Boolean).sort((a, b) => b.updated - a.updated)};
+}
+async function getDeck({id}) { const k = await readDeck(id, await getHead()); if (!k) throw E(404, 'Presentation not found'); return structuredClone(k); }
+async function saveDeck(_, b) {
+  const d = b.deck; if (!d || typeof d !== 'object' || !new RegExp('^' + DECK_ID + '$').test(d.id || '')) throw E(400, 'Invalid presentation');
+  if (!Array.isArray(d.slides) || d.slides.length > 300) throw E(400, 'A presentation can have up to 300 slides');
+  d.title = String(d.title || 'Untitled presentation').slice(0, 200); d.history = (d.history || []).slice(-15);
+  const uploads = (d.uploads || []).filter(u => PENDING.has(u.fileId));
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const head = await getHead(), cur = await readDeck(d.id, head);
+    if (cur && b.base_updated !== undefined && cur.updated > b.base_updated) throw E(409, 'Someone else saved this presentation after you opened it. Reload it to see their changes, or save a copy.');
+    const out = {...d, updated: now(), by: ME().name, login: ME().id, created: (cur && cur.created) || d.created || now()};
+    const text = JSON.stringify(out); if (text.length > 3 * 1024 * 1024) throw E(413, 'This presentation is too large to save (text over 3 MB).');
+    const changes = [{path: deckPath(d.id), text}, ...uploads.map(u => ({path: `presentations/${d.id}/files/${u.fileId}${u.ext}`, blob: PENDING.get(u.fileId).blob}))];
+    try { const nh = await commit(head, changes, `${ME().name}: Save presentation "${out.title}"`); DECK_CACHE.set(d.id, {head: nh, deck: out}); uploads.forEach(u => PENDING.delete(u.fileId)); return {updated: out.updated}; }
+    catch (e) { if (e.conflict) continue; throw e; }
+  }
+  throw E(409, 'Someone else changed the repository at the same moment. Please try again.');
+}
+async function deleteDeck({id}) {
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const head = await getHead(), cur = await readDeck(id, head); if (!cur) throw E(404, 'Presentation not found');
+    const files = (await listDir(`presentations/${id}/files`, head)).map(f => `presentations/${id}/files/${f.name}`);
+    try { await commit(head, [{path: deckPath(id), del: true}, ...files.map(p => ({path: p, del: true}))], `${ME().name}: Delete presentation "${cur.title}"`); DECK_CACHE.delete(id); return {ok: true}; }
+    catch (e) { if (e.conflict) continue; throw e; }
+  }
+  throw E(409, 'Someone else changed the repository at the same moment. Please try again.');
+}
+async function uploadDeckFile({id}, b, o) {
+  const blob = o.raw; if (!blob || !blob.size) throw E(400, 'Empty upload');
+  const h = new Uint8Array(await blob.slice(0, 4096).arrayBuffer()), asc = String.fromCharCode(...h);
+  const ext = (h[0] === 0x89 && asc.slice(1, 4) === 'PNG') ? '.png' : (h[0] === 0xff && h[1] === 0xd8) ? '.jpg' : /^GIF8[79]a/.test(asc) ? '.gif' : (asc.slice(0, 4) === 'RIFF' && asc.slice(8, 12) === 'WEBP') ? '.webp' : /<svg/i.test(asc) ? '.svg' : null;
+  if (!ext) throw E(400, 'Unsupported file. Please upload a PNG, JPG, GIF, WebP or SVG image.');
+  if (blob.size > 25 * 1024 * 1024) throw E(413, 'Images can be at most 25 MB.');
+  const fid = nid(), typed = new Blob([blob], {type: MIME[ext]}); PENDING.set(fid, {blob: typed, ext, aid: null}); IMG_CACHE[fid] = URL.createObjectURL(typed);
+  return {file_id: fid, ext};
+}
+async function fetchDeckFile(pid, fid, ext) {
+  if (IMG_CACHE[fid]) return IMG_CACHE[fid];
+  const r = await ghFetch(`${repoPath()}/contents/${encPath(`presentations/${pid}/files/${fid}${ext}`)}?ref=${GHS.head || await getHead()}`, {raw: true});
+  return IMG_CACHE[fid] = URL.createObjectURL(new Blob([await r.arrayBuffer()], {type: MIME[ext] || 'application/octet-stream'}));
+}
+
 const ID = '[0-9a-f]{16}', A_ = `^\\/analyses\\/(?<aid>${ID})`;
 const R = (m, p, fn) => [m, new RegExp(p), fn];
 const ROUTES = [
+  R('GET', '^\\/presentations$', listDecks), R('POST', '^\\/presentations$', saveDeck), R('GET', `^\\/presentations\\/(?<id>${DECK_ID})$`, getDeck), R('DELETE', `^\\/presentations\\/(?<id>${DECK_ID})$`, deleteDeck), R('POST', `^\\/presentations\\/(?<id>${DECK_ID})\\/upload$`, uploadDeckFile),
   R('GET', '^\\/me$', H.me), R('POST', '^\\/logout$', H.logout),
   R('GET', '^\\/analyses$', H.list), R('POST', '^\\/analyses$', H.createAnalysis),
   R('GET', A_ + '$', H.getAnalysis), R('PATCH', A_ + '$', H.updateAnalysis), R('DELETE', A_ + '$', H.deleteAnalysis), R('GET', A_ + '\\/export$', H.exportAnalysis),
@@ -925,5 +984,5 @@ const demoLock = () => { GHS.readonly = true; };
 async function demoResume() {        // a failed sign-in attempt must not end the demo
   resetSession(); Object.assign(GHS, {token: 'demo', repo: 'demo/sample-data', branch: 'main', demo: true, readonly: true, user: {id: 'visitor', name: 'Demo visitor', email: ''}}); await getHead(); return GHS.user;
 }
-Object.assign(window, {api, batch, ghDemo, demoLock, demoResume, DEMO_MSG, ghConnect, ghRestore, ghSwitch, ghForget, ghRemove, savedRepo, savedRepos, isRemembered, GHS, imgCached, fetchImage});
+Object.assign(window, {api, batch, ghDemo, demoLock, demoResume, DEMO_MSG, ghConnect, ghRestore, ghSwitch, ghForget, ghRemove, savedRepo, savedRepos, isRemembered, GHS, imgCached, fetchImage, fetchDeckFile});
 })();

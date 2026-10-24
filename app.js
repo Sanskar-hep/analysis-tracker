@@ -311,7 +311,8 @@ function stageBadges0(a) {
 
 function renderSide() {
   if (!S) {
-    $('#side').innerHTML = `${brand}<div class="nav"><a href="#/" class="on">Analyses</a></div>`;
+    const sl = route()[0] === 'slides';
+    $('#side').innerHTML = `${brand}<div class="nav"><a href="#/" class="${sl ? '' : 'on'}">Analyses</a><a href="#/slides" class="${sl ? 'on' : ''}" title="Build a presentation for a group or collaboration meeting"><span>Meeting Slides</span></a></div>`;
     return;
   }
   const pg = route().slice(2)[0] || '', pend = allPending().length;
@@ -327,6 +328,7 @@ function renderSide() {
       ${nav(commentsHref, 'Comments', ['reviewer', 'meetings', 'pending'].includes(pg), pend, 'Comments from conveners and meetings, and your answers')}
       ${isAN() ? nav(L('/versions'), 'Version History', pg === 'versions' || pg === 'compare-an', 0, 'Published AN versions and plot revisions') : ''}
       ${isAN() ? nav(L('/release'), 'Release &amp; Export', pg === 'release', 0, 'Check what is ready, then download the package') : ''}
+      ${nav('#/slides', 'Meeting Slides', false, 0, 'Build a presentation for a group or collaboration meeting')}
       <div class="sec"><span>More</span></div>
       ${isAN() ? nav(L('/docs'), 'Documents', pg === 'docs') : ''}
       ${nav(L('/activity'), 'Activity log', pg === 'activity', 0, 'Who did what, and when')}
@@ -843,7 +845,7 @@ function maybeCadi() {
   const r = route(); if (r[0] !== 'a' || !S || cadiShown || document.querySelector('.overlay')) return;
   const st = cadiOf(S.an).status; if (st === 'yes' || st === 'no') return;
   try { if (sessionStorage.getItem('cadi-later-' + S.an.id)) return; } catch {}
-  cadiShown = true; setTimeout(() => { cadiShown = false; if (!document.querySelector('.overlay')) cadiModal(); }, 400);
+  cadiShown = true; setTimeout(() => { cadiShown = false; if (!document.querySelector('.overlay') && route()[0] === 'a' && S) cadiModal(); }, 400);
 }
 function editAnModal() {
   const a = S.an;
@@ -874,7 +876,8 @@ function render() {
   if (!$('#main')) mountShell();
   renderSide(); renderTop();
   const r = route(); let h;
-  if (r[0] !== 'a' || !S) h = viewHome();
+  if (r[0] === 'slides') h = MS.view();
+  else if (r[0] !== 'a' || !S) h = viewHome();
   else {
     const s = r.slice(2);
     if (!s[0]) h = viewDash();
@@ -895,6 +898,7 @@ function render() {
   }
   if (r[0] === 'a' && S && ['meetings', 'reviewer', 'pending'].includes(r[2])) h = commentTabs(r[2]) + h;
   $('#main').innerHTML = h;
+  if (r[0] === 'slides') MS.mounted(); else $('#main').classList.remove('mswide');
   hydrateImages();
   if (r[0] === 'a' && S && r[2] === 'compare-an') ANC.refreshHave();
   if (r[0] === 'a' && S && r[2] === 'pdf') PDF.mountPdf();
@@ -1429,7 +1433,7 @@ const A = {
         await reload(); toast(`Deleted ${r.reviews + r.comments} comment${r.reviews + r.comments === 1 ? '' : 's'}.`);
       }});
   },
-  'add-anc': () => ancModal(), 'reply-doc': () => replyModal(), 'gdoc': () => GDOC.run(), 'edit-anc': el => ancModal(S.anc.find(c => c.id === el.dataset.id)),
+  'add-anc': () => ancModal(), 'reply-doc': () => replyModal(), 'gdoc': () => GDOC.run(), slides: el => SLIDES.run({catId: el.dataset.cat || null}), 'edit-anc': el => ancModal(S.anc.find(c => c.id === el.dataset.id)),
   'resolve-anc': el => resolveAncModal(S.anc.find(c => c.id === el.dataset.id)),
   'reopen-anc': async el => { await api('POST', aurl(`/an-comments/${el.dataset.id}/reopen`)); await reload(); },
   'del-anc': el => confirmBox('Delete comment', 'Delete this comment?', 'Delete', async () => { await api('DELETE', aurl('/an-comments/' + el.dataset.id)); await reload(); }),

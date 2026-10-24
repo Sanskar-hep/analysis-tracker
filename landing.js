@@ -90,6 +90,8 @@ window.LANDING = (() => {
         ${li('Working draft and published AN versions', 'with change summary and a downloadable package')}
         ${li('Comments, replies and revised plots', 'meetings, conveners and general comments; email import; point-by-point reply document; highlights in the AN PDF')}
         ${li('AN PDF tools', 'figure scanning and matching, comparison of two AN versions')}
+        ${li('Meeting Slides', 'build a group-meeting or collaboration-meeting talk: choose plots and text, pick a layout for each slide, edit, save, then export to Google Slides (after a one-time Google setup) or download a PowerPoint file')}
+        ${li('Slides from plots', 'choose plots and versions; one click makes a .pptx with each plot, what changed, why, dataset and comments, ready to open in Google Slides')}
         ${li('Export to Google Docs', 'one click builds a .docx with every comment, reply and plot; you drag it into Google Drive')}
         ${li('LaTeX helpers', 'update figures in your source zip and add figure and page references to replies')}
         ${li('Public demo', 'two read-only sample analyses (invented numbers) you can open without signing in; every change is blocked and sign-in is offered instead')}
@@ -98,7 +100,7 @@ window.LANDING = (() => {
       <div><h3 class="plan">Not available yet</h3><ul>
         ${li('Dependency tracing', 'automatically listing which results need revalidation after an upstream change is planned, not built')}
         ${li('Validation evidence and configuration tracking', 'a plot version records its dataset and a code link; full configurations and validation records are not tracked')}
-        ${li('Google Slides', 'putting plots into a presentation is planned, not built')}
+        ${li('Google Slides export without setup', 'exporting straight to Google Slides needs your own free Google OAuth client ID (one-time); until then you download a .pptx')}
         ${li('Direct push to Google Docs', 'today you open the exported file yourself')}
         ${li('Automatic ingestion from analysis workflows', 'plots are uploaded by you, singly or in bulk')}
         ${li('User accounts and permissions of its own', 'access is whatever GitHub gives to the data repository')}

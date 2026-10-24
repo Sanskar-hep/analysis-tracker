@@ -169,7 +169,7 @@
       const r = await build((i, n) => done.set(`Collecting plots… ${i} of ${n}`));
       if (!r) { toast('There are no comments to export yet.'); return; }
       const name = fileName(), a = document.createElement('a'); a.href = URL.createObjectURL(r.blob); a.download = name; document.body.appendChild(a); a.click(); a.remove();
-      openModal({title: 'Your document is ready', submit: 'Open Google Drive', sub: `<b>${esc(name)}</b> was saved to your downloads folder: ${r.count} comment${r.count === 1 ? '' : 's'} with their replies and ${r.plots} plot${r.plots === 1 ? '' : 's'}.`,
+      openModal({title: 'Your document is ready', allowDemo: true, submit: 'Open Google Drive', sub: `<b>${esc(name)}</b> was saved to your downloads folder: ${r.count} comment${r.count === 1 ? '' : 's'} with their replies and ${r.plots} plot${r.plots === 1 ? '' : 's'}.`,
         body: `<p style="margin-top:0"><b>To turn it into a Google Doc:</b></p><ol style="margin:0 0 8px 18px;line-height:1.7"><li>Click <b>Open Google Drive</b> below.</li><li>Drag the downloaded file into Drive (or <b>New → File upload</b>).</li><li>Right-click the file → <b>Open with → Google Docs</b>. Then use <b>File → Save as Google Docs</b> to keep an editable copy.</li><li>Use <b>Share</b> to send it to your colleagues.</li></ol><p class="meta">The pictures are inside the file; nothing was sent to Google by this website.</p>`,
         onSubmit: async () => { window.open('https://drive.google.com/drive/my-drive', '_blank', 'noopener'); }});
     } catch (e) { toast('Could not build the document: ' + e.message, 'err', 9000); } finally { done(); }
