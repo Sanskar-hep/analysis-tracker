@@ -73,7 +73,9 @@ window.DECK = (() => {
   }
 
   /* ============================ text fitting ============================ */
-  const lines = t => String(t || '').split('\n').map(s => s.replace(/^\s*(?:[-•*]|\d+[.)])\s+/, '').trim()).filter(Boolean);
+  const lines = t => parseBullets(t).map(i => i.t);
+  /* one bullet per line; a line indented by two spaces (or a tab) is a sub-point, four spaces a sub-sub-point */
+  const parseBullets = t => String(t || '').split('\n').map(raw => { const m = /^(\s*)(?:(?:[-•*☐]|\d+[.)])\s+)?(.*?)\s*$/.exec(raw), sp = m[1].replace(/\t/g, '  ').length; return {t: m[2], lvl: Math.min(2, Math.floor(sp / 2))}; }).filter(i => i.t);
   function fitSize(ls, w, h, base, min, bulletPad) {              // largest font size at which the text fits in the box (estimate)
     for (let sz = base; sz >= min; sz -= 1) {
       const cpl = Math.max(6, Math.floor((w - .22 - bulletPad) * 72 / (sz * .5)));
@@ -91,12 +93,12 @@ window.DECK = (() => {
     const rect = (x, y, w, h, fill, line) => els.push({k: 'rect', x, y, w, h, fill, line});
     const T = (key, r, paras, o = {}) => els.push({k: 'text', key, x: r.x, y: r.y, w: r.w, h: r.h, paras, fill: o.fill, anchor: o.anchor || 't', pad: o.pad == null ? .08 : o.pad, ph: o.ph, line: o.line, edit: o.edit !== false});
     const run = (t, o = {}) => ({t, sz: o.sz, b: !!o.b, i: !!o.i, color: o.color || th.fg, font});
-    const para = (runs, o = {}) => ({runs: [].concat(runs), bullet: o.bullet || null, algn: o.algn || 'l', before: o.before || 0, num: !!o.num});
+    const para = (runs, o = {}) => ({runs: [].concat(runs), bullet: o.bullet || null, algn: o.algn || 'l', before: o.before || 0, num: !!o.num, lvl: o.lvl || 0});
     const bullets = (key, text, r, o = {}) => {
-      const ls = lines(text), base = (o.base || 17) * sc, f = fitSize(ls, r.w, r.h - .1, base, 10, .32);
+      const items = parseBullets(text), ls = items.map(i => ' '.repeat(i.lvl * 5) + i.t), base = (o.base || 17) * sc, f = fitSize(ls, r.w, r.h - .1, base, 10, .34);
       if (!f.ok && ls.length) warn.push('The text in the ' + (FIELD_LABEL[key] || 'box').toLowerCase() + ' box is too long for this layout.');
       const bullet = o.num ? 'num' : o.check ? '☐' : '•';
-      T(key, r, ls.map((l, i) => para(run(l, {sz: f.sz, color: th.fg}), {bullet, before: i ? f.sz * .45 : 0, num: !!o.num})), {fill: o.fill, pad: o.pad == null ? .12 : o.pad, ph: 'Click to add text'});
+      T(key, r, items.map((it, i) => para(run(it.t, {sz: it.lvl ? Math.round(f.sz * (1 - it.lvl * .1)) : f.sz, color: th.fg}), {bullet: it.lvl ? '–' : bullet, lvl: it.lvl, before: i ? f.sz * (it.lvl ? .2 : .45) : 0, num: !it.lvl && !!o.num})), {fill: o.fill, pad: o.pad == null ? .12 : o.pad, ph: 'Click to add text'});
       return f.sz;
     };
     /* ---- common furniture ---- */
@@ -208,9 +210,9 @@ window.DECK = (() => {
   const IN = 914400, emu = v => Math.round(v * IN), hex = c => String(c || '#000000').replace('#', '').toUpperCase();
   function xmlRun(r) { return `<a:r><a:rPr lang="en-GB" sz="${Math.round((r.sz || 14) * 100)}"${r.b ? ' b="1"' : ''}${r.i ? ' i="1"' : ''} dirty="0"><a:solidFill><a:srgbClr val="${hex(r.color)}"/></a:solidFill><a:latin typeface="${x(r.font || 'Calibri')}"/></a:rPr><a:t>${x(r.t)}</a:t></a:r>`; }
   function xmlPara(p) {
-    const sz = (p.runs[0] && p.runs[0].sz) || 14, ind = emu(.28);
+    const sz = (p.runs[0] && p.runs[0].sz) || 14, ind = emu(.34), lvl = p.lvl || 0, marL = emu(.34 + lvl * .4);
     const bu = p.bullet === 'num' ? `<a:buFont typeface="+mj-lt"/><a:buAutoNum type="arabicPeriod"/>` : p.bullet ? `<a:buFont typeface="Arial"/><a:buChar char="${x(p.bullet)}"/>` : '<a:buNone/>';
-    return `<a:p><a:pPr${p.bullet ? ` marL="${ind}" indent="-${ind}"` : ''} algn="${p.algn || 'l'}"><a:spcBef><a:spcPts val="${Math.round((p.before || 0) * 100)}"/></a:spcBef>${bu}</a:pPr>${p.runs.map(xmlRun).join('')}<a:endParaRPr lang="en-GB" sz="${Math.round(sz * 100)}"/></a:p>`;
+    return `<a:p><a:pPr${p.bullet ? ` marL="${marL}" indent="-${ind}"${lvl ? ` lvl="${lvl}"` : ''}` : ''} algn="${p.algn || 'l'}"><a:spcBef><a:spcPts val="${Math.round((p.before || 0) * 100)}"/></a:spcBef>${bu}</a:pPr>${p.runs.map(xmlRun).join('')}<a:endParaRPr lang="en-GB" sz="${Math.round(sz * 100)}"/></a:p>`;
   }
   async function toPptx(deck, progress) {
     const media = new Map(), srcs = []; deck.slides.forEach(s => (s.images || []).forEach(im => { if (im.src && !srcs.some(a => skey(a) === skey(im.src))) srcs.push(im.src); }));
@@ -291,6 +293,6 @@ window.DECK = (() => {
   }
   const forgetGoogle = () => { gTok = null; };
 
-  return {THEMES, FONTS, LAYOUTS, LAYOUT, TYPES, FIELD_LABEL, SW, SH, uid, themeOf, compose, recommend, lines, skey, newSlide, newDeck, clone, slideWarnings, emptyText, fmtDate,
+  return {THEMES, FONTS, LAYOUTS, LAYOUT, TYPES, FIELD_LABEL, SW, SH, uid, themeOf, compose, recommend, lines, parseBullets, skey, newSlide, newDeck, clone, slideWarnings, emptyText, fmtDate,
     setResolver: f => { resolver = f; }, toPptx, exportGoogle, clientId, setClientId: v => { try { localStorage.setItem('at_gclient', (v || '').trim()); } catch {} }, forgetGoogle};
 })();

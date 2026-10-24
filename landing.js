@@ -90,7 +90,7 @@ window.LANDING = (() => {
         ${li('Working draft and published AN versions', 'with change summary and a downloadable package')}
         ${li('Comments, replies and revised plots', 'meetings, conveners and general comments; email import; point-by-point reply document; highlights in the AN PDF')}
         ${li('AN PDF tools', 'figure scanning and matching, comparison of two AN versions')}
-        ${li('Meeting Slides', 'build a group-meeting or collaboration-meeting talk: choose plots and text, pick a layout for each slide, edit, save, then export to Google Slides (after a one-time Google setup) or download a PowerPoint file')}
+        ${li('Meeting Slides (experimental)', 'build a group-meeting or collaboration-meeting talk: choose plots and text, pick a layout for each slide, edit, save, then export to Google Slides (after a one-time Google setup) or download a PowerPoint file')}
         ${li('Slides from plots', 'choose plots and versions; one click makes a .pptx with each plot, what changed, why, dataset and comments, ready to open in Google Slides')}
         ${li('Export to Google Docs', 'one click builds a .docx with every comment, reply and plot; you drag it into Google Drive')}
         ${li('LaTeX helpers', 'update figures in your source zip and add figure and page references to replies')}

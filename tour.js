@@ -97,17 +97,19 @@ window.TOUR = (() => {
     {id: 'quickslides', icon: '🖼️', title: 'Quick slides from plots', blurb: 'Tick plots, get a PowerPoint file.', start: A(TQ, '/gallery'), steps: [
       {sel: '[data-act=slides]', title: 'Make slides', text: 'Tick plots and versions; each becomes a slide with its picture and the facts recorded for it. Optional before/after slides and a comments slide. You get a PowerPoint file that Google Slides opens.', try: {label: 'Try it: choose plots', run: () => SLIDES.run()}},
     ]},
-    {id: 'meetingslides', icon: '🎤', title: 'Meeting Slides builder', blurb: 'Build a talk, edit it, export it.', start: () => '#/slides', steps: [
-      {sel: '.mtypes', title: 'Choose the kind of meeting', text: 'Group meeting, collaboration meeting, or from scratch. These only set the starting outline: every slide can be changed.'},
-      {sel: '.pres', title: 'A sample presentation', text: 'This sample was made from the demo analysis. Its text is invented. Your own presentations are saved in your data repository.'},
-      {go: deckPath, sel: '#msb', wait: '#msb .msslide', title: 'The editor', text: 'Slides on the left, the slide in the middle, settings on the right. Click any text on the slide to edit it.'},
-      {sel: '#msLeft .mstabs', title: 'Slides and Content', text: '<b>Slides</b> shows thumbnails: drag one to reorder. <b>Content</b> is your library: plots from the analysis, text blocks, your own uploaded figures and, only if you tick them, review comments.'},
-      {sel: '#msTop [data-ms=make]', title: 'Make Slides', text: 'Turns the content you ticked into slides: plots with the facts recorded for them, plus the meeting outline. It writes no physics text for you.', try: {label: 'Try it: open Make Slides', run: () => document.querySelector('[data-ms=make]').click()}},
-      {sel: '#msCenter .canvaswrap', title: 'The slide', text: 'Click text to edit it. Click a plot to select it, or an empty box to add one. Plots keep their shape and the editor warns when they get too small.'},
-      {sel: '#msRight .layoutpick', title: 'Layouts', text: 'Three kinds: Text + Plots, Plots only, Text only, 21 layouts in all. “Recommend a layout” picks one from the number of plots.'},
-      {sel: '#msRight .tabs [data-t=deck]', title: 'Theme and style', text: 'Four themes, font, text size, plot spacing, colours and a footer.', next: () => { const t = $q('#msRight [data-t=deck]'); if (t) t.click(); }},
-      {sel: '#msTop [data-ms=gexport]', title: 'Export to Google Slides', text: 'Creates a real, editable Google Slides file in your Drive. It needs a one-time Google setup, explained when you press it. Until then, use “Download .pptx” and open the file in Google Slides.'},
-      {sel: '#msTop [data-ms=save]', title: 'Save and come back', text: 'Drafts are saved in your repository, with a list of earlier versions you can restore. If a plot gets a newer version, the slide tells you and lets you keep, replace or compare. It never swaps a plot silently.'},
+    {id: 'meetingslides', icon: '🎤', title: 'Meeting Slides in three steps', blurb: 'Choose content, edit the slides, export.', start: () => '#/slides', steps: [
+      {sel: '.mtypes', title: 'Choose the kind of meeting', text: 'Group meeting, collaboration meeting, or from scratch. This only sets a starting point: every slide can be changed. <b>Meeting Slides is marked Experimental</b>: it is new, so check each slide before you present.'},
+      {sel: '.pres', title: 'A sample presentation', text: 'This sample was made from the demo analysis; its text is invented. Your own presentations are saved in your data repository.'},
+      {go: deckPath, sel: '#msTop .steps', wait: '#msTop .steps', title: 'Three simple steps', text: 'Everything happens in order: <b>1 Choose content</b>, <b>2 Edit slides</b>, <b>3 Export</b>. You can click any step at any time.', next: () => { const b = $q('#msTop [data-t="1"]'); if (b) b.click(); }},
+      {sel: '#msBody .plotlist', wait: '#msBody .stepwrap', title: 'Step 1: tick your plots', text: 'The plots of the analysis you chose. Tick the ones you want to show. Each one becomes a slide. You can also add your own text slide or upload your own figure.'},
+      {sel: '#msBody .opts', title: 'More options (you can ignore these)', text: 'Plots per slide, the meeting outline, an agenda slide and optional review comments. The defaults are fine for most talks.'},
+      {sel: '#msTop [data-ms=make]', title: 'Make slides', text: 'Turns what you ticked into slides. It writes no physics text for you: text next to a plot comes only from what is recorded for that plot.', next: () => { const b = $q('#msTop [data-t="2"]'); if (b) b.click(); }},
+      {sel: '#msCenter .canvaswrap', wait: '#msCenter .msslide', title: 'Step 2: edit your slides', text: 'This is the slide. <b>Click any text to change it.</b> In a bullet list, press <b>Tab</b> to make a bullet a sub-point. Click an empty box to add a plot.'},
+      {sel: '#msLeft .thumbs', title: 'Your slides', text: 'All slides in order. Click one to open it. Drag one to move it.'},
+      {sel: '#msRight .layoutpick', title: 'Change the layout', text: 'Pick how the slide is arranged: plot with text, plots only, or text only. “Pick a layout for me” chooses one for you.'},
+      {sel: '#msRight .themepick', title: 'Choose a look', text: 'Four themes. Fonts, colours and the footer are under “More style options”.', next: () => { const b = $q('#msTop [data-t="3"]'); if (b) b.click(); }},
+      {sel: '#msBody .exportcards', wait: '#msBody .stepwrap', title: 'Step 3: export', text: '<b>Download PowerPoint</b> gives you a file that also opens in Google Slides (upload it to Drive). <b>Export to Google Slides</b> does the upload for you after a one-time Google setup.'},
+      {sel: '#msBody [data-ms=save]', title: 'Save a version', text: 'Your work saves itself while you edit. “Save a version” keeps a copy you can return to. If a plot gets a newer version later, the slide tells you and lets you keep, replace or compare. It never swaps a plot silently.'},
     ]},
   ];
 

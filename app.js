@@ -312,7 +312,7 @@ function stageBadges0(a) {
 function renderSide() {
   if (!S) {
     const sl = route()[0] === 'slides';
-    $('#side').innerHTML = `${brand}<div class="nav"><a href="#/" class="${sl ? '' : 'on'}">Analyses</a><a href="#/slides" class="${sl ? 'on' : ''}" title="Build a presentation for a group or collaboration meeting"><span>Meeting Slides</span></a></div>`;
+    $('#side').innerHTML = `${brand}<div class="nav"><a href="#/" class="${sl ? '' : 'on'}">Analyses</a><a href="#/slides" class="${sl ? 'on' : ''}" title="Build a presentation for a group or collaboration meeting (experimental)"><span>Meeting Slides</span><span class="badge exp">Experimental</span></a></div>`;
     return;
   }
   const pg = route().slice(2)[0] || '', pend = allPending().length;
@@ -328,7 +328,7 @@ function renderSide() {
       ${nav(commentsHref, 'Comments', ['reviewer', 'meetings', 'pending'].includes(pg), pend, 'Comments from conveners and meetings, and your answers')}
       ${isAN() ? nav(L('/versions'), 'Version History', pg === 'versions' || pg === 'compare-an', 0, 'Published AN versions and plot revisions') : ''}
       ${isAN() ? nav(L('/release'), 'Release &amp; Export', pg === 'release', 0, 'Check what is ready, then download the package') : ''}
-      ${nav('#/slides', 'Meeting Slides', false, 0, 'Build a presentation for a group or collaboration meeting')}
+      ${nav('#/slides', 'Meeting Slides <span class="badge exp">Experimental</span>', false, 0, 'Build a presentation for a group or collaboration meeting (experimental)')}
       <div class="sec"><span>More</span></div>
       ${isAN() ? nav(L('/docs'), 'Documents', pg === 'docs') : ''}
       ${nav(L('/activity'), 'Activity log', pg === 'activity', 0, 'Who did what, and when')}

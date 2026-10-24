@@ -5,12 +5,13 @@
 window.MS = (() => {
   'use strict';
   const D = DECK, $$ = (s, r = document) => [...r.querySelectorAll(s)];
-  const ms = {deck: null, sel: 0, selImg: -1, tab: null, ctab: 'plots', rtab: 'slide', undo: [], redo: [], list: null, listAt: 0, aid: null, picks: {}, q: '', cat: '', blocksSel: new Set(), upSel: new Set(), rev: {open: false, changes: false, decisions: false},
+  const ms = {deck: null, sel: 0, selImg: -1, step: 0, bodyStep: 0, opt: {stype: 'auto', per: 1, facts: true, tmpl: false, agenda: false}, undo: [], redo: [], list: null, listAt: 0, aid: null, picks: {}, q: '', cat: '', blocksSel: new Set(), upSel: new Set(), rev: {open: false, changes: false, decisions: false},
     ncache: new Map(), mem: new Map(), local: {}, stale: {}, status: '', base: 0, loading: false, dirty: false, saveTimer: null, srcMap: new Map(), urls: new Map(), pre: null, err: ''};
   const lockedDemo = () => typeof demoLocked === 'function' && demoLocked();
   const snap = d => JSON.stringify({title: d.title, subtitle: d.subtitle, presenter: d.presenter, date: d.date, analysisName: d.analysisName, duration: d.duration, targetSlides: d.targetSlides, theme: d.theme, style: d.style, blocks: d.blocks, uploads: d.uploads, slides: d.slides});
   const restore = (d, s) => { Object.assign(d, JSON.parse(s)); };
   const ago = t => { if (!t) return 'not saved yet'; const m = Math.round((Date.now() - t) / 60000); return m < 1 ? 'just now' : m < 60 ? m + ' min ago' : m < 1440 ? Math.round(m / 60) + ' h ago' : new Date(t).toLocaleDateString(); };
+  const expHidden = () => { try { return localStorage.getItem('at_exp_ok') === '1'; } catch { return false; } };
   const cutT = (s, n) => { s = String(s || '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s; };
 
   /* ============================ pictures ============================ */
@@ -48,8 +49,8 @@ window.MS = (() => {
         if (o.sample) { return e.paras.length || e.key === 'title' ? `<div class="msbar" style="${box(e)};${e.fill ? 'background:' + e.fill : ''}"><i></i><i></i>${e.key === 'title' ? '' : '<i></i>'}</div>` : ''; }
         const editable = live && e.edit, empty = !e.paras.some(p => p.runs.some(r => r.t));
         const ps = e.paras.map(p => {
-          const sz = p.runs[0] && p.runs[0].sz || 14, bu = p.bullet; if (bu === 'num') n = n; const ind = bu ? ccq(.28) : '0';
-          return `<div class="msp${bu === 'num' ? ' num' : ''}" ${bu && bu !== 'num' ? `data-bu="${esc(bu)}"` : ''} style="font-size:${cq(sz)};color:${(p.runs[0] && p.runs[0].color) || 'inherit'};margin-top:${cq(p.before || 0)};padding-left:${ind};text-indent:-${bu ? ind : '0'};text-align:${p.algn === 'ctr' ? 'center' : p.algn === 'r' ? 'right' : 'left'}">${p.runs.map(r => `<span style="font-size:${cq(r.sz || 14)};${r.b ? 'font-weight:700;' : ''}${r.i ? 'font-style:italic;' : ''}color:${r.color};font-family:'${r.font}',sans-serif">${esc(r.t)}</span>`).join('')}</div>`;
+          const sz = p.runs[0] && p.runs[0].sz || 14, bu = p.bullet, lvl = p.lvl || 0, ind = bu ? ccq(.34) : '0', pl = bu ? ccq(.34 + lvl * .4) : '0';
+          return `<div class="msp${bu === 'num' ? ' num' : ''}" data-lvl="${lvl}" ${bu === 'num' || p.numbered ? 'data-num="1"' : ''} ${bu && bu !== 'num' ? `data-bu="${esc(bu)}"` : ''} style="font-size:${cq(sz)};color:${(p.runs[0] && p.runs[0].color) || 'inherit'};margin-top:${cq(p.before || 0)};padding-left:${pl};text-indent:-${bu ? ind : '0'};text-align:${p.algn === 'ctr' ? 'center' : p.algn === 'r' ? 'right' : 'left'}">${p.runs.map(r => `<span style="font-size:${cq(r.sz || 14)};${r.b ? 'font-weight:700;' : ''}${r.i ? 'font-style:italic;' : ''}color:${r.color};font-family:'${r.font}',sans-serif">${esc(r.t)}</span>`).join('')}</div>`;
         }).join('');
         return `<div class="mst${e.paras.some(p => p.bullet === 'num') ? ' numbered' : ''}${editable && empty ? ' empty' : ''}" ${editable ? `contenteditable="true" spellcheck="true" data-key="${esc(e.key)}" data-ph="${esc(e.ph || '')}"` : ''} style="${box(e)};padding:${ccq(e.pad * .6)} ${ccq(e.pad)};justify-content:${e.anchor === 'ctr' ? 'center' : e.anchor === 'b' ? 'flex-end' : 'flex-start'};${e.fill ? 'background:' + e.fill : ''}">${ps}</div>`;
       }
@@ -78,8 +79,10 @@ window.MS = (() => {
     const list = ms.list;
     const pcard = p => `<div class="card pres" data-ms="open" data-id="${p.id}"><div><h3>${esc(p.title)}</h3><div class="meta">${p.meeting_type === 'collab' ? 'Collaboration meeting' : 'Group meeting'} · ${p.slides} slide${p.slides === 1 ? '' : 's'} · ${esc(D.THEMES[p.theme] ? D.THEMES[p.theme].name : '')}</div><div class="meta">${p.mem ? 'Draft in this demo session, not saved' : 'Edited ' + ago(p.updated) + (p.by ? ' by ' + esc(p.by) : '')}</div></div>
       <div class="actions"><button class="btn sm" data-ms="open" data-id="${p.id}">Open</button><button class="btn sm" data-ms="dup" data-id="${p.id}">Duplicate</button><button class="btn sm" data-ms="ren" data-id="${p.id}">Rename</button><button class="btn sm danger" data-ms="del" data-id="${p.id}">Delete</button></div></div>`;
-    return `<div class="pagehead"><div><h1>Meeting Slides</h1><p>Build a presentation for a group or collaboration meeting from your plots and your own text. Pick the content, choose a layout for each slide, edit, then export to Google Slides or PowerPoint.</p></div>
+    return `<div class="pagehead"><div><h1>Meeting Slides <span class="badge exp" title="New and still being tested; see the limits on the Meeting Slides page">Experimental</span></h1><p>Build a presentation for a group or collaboration meeting from your plots and your own text. Pick the content, choose a layout for each slide, edit, then export to Google Slides or PowerPoint.</p></div>
       <div class="actions"><button class="btn primary" data-ms="new" data-type="group">+ New presentation</button></div></div>
+    ${expHidden() ? '' : `<div class="expnote" id="expnote"><div><b>Experimental.</b> Meeting Slides is new and still being tested, so it has limits:
+        <ul><li>Exporting straight to Google Slides needs a one-time Google setup and has not been widely tested. Downloading the PowerPoint file always works.</li><li>Google Slides may replace fonts, and the layouts are fixed templates.</li><li>Text that is too long is flagged, not rewritten. Nothing is checked for physics: please look at every slide before you present.</li></ul></div><button type="button" class="btn sm" data-ms="expok">Got it</button></div>`}
     <div class="mtypes">
       <div class="card mtype" data-ms="new" data-type="group" tabindex="0"><div class="mt-ico">👥</div><h2>Group meeting</h2><p>Regular research-group meetings, progress updates and supervisor discussions.</p><ul><li>Progress and completed tasks</li><li>Important plots, Data/MC agreement</li><li>Background estimation and validation</li><li>Systematics, problems, next steps</li></ul><span class="btn primary sm">Start</span></div>
       <div class="card mtype" data-ms="new" data-type="collab" tabindex="0"><div class="mt-ico">🧭</div><h2>Collaboration meeting</h2><p>Analysis reviews, conveners' discussions and talks to a wider analysis team.</p><ul><li>Overview and objectives, key results</li><li>Validation studies and cross-checks</li><li>Systematic summaries; reviewer feedback if you want it</li><li>Decisions required, questions, conclusions</li></ul><span class="btn primary sm">Start</span></div>
@@ -93,95 +96,92 @@ window.MS = (() => {
     ${Object.entries(D.TYPES).map(([tk, tn]) => `<h3 class="laygrp">${tn}</h3><div class="layouts">${D.LAYOUTS.filter(l => l.type === tk).map(l => `<div class="layout"><div class="mini">${miniLayout(l.id)}</div><b>${esc(l.name)}</b><span class="meta">${esc(l.desc)}</span></div>`).join('')}</div>`).join('')}`;
   }
 
-  /* ---------------- builder ---------------- */
+  /* ---------------- builder: three plain steps (1 choose content, 2 edit slides, 3 export) ---------------- */
   function builderHtml(id) {
     if (!ms.deck || ms.deck.id !== id) { if (!ms.loading) { ms.loading = true; openDeck(id); } return '<div class="card empty">Opening the presentation…</div>'; }
-    return `<div class="msb" id="msb"><div class="msbar-top" id="msTop"></div><div class="msgrid"><aside class="msleft card" id="msLeft"></aside><section class="mscenter" id="msCenter"></section><aside class="msright card" id="msRight"></aside></div></div>`;
+    return `<div class="msb" id="msb"><div class="msbar-top" id="msTop"></div><div id="msBody"></div></div>`;
   }
   function mounted() {
     const r = route(); const main = document.getElementById('main'); if (main) main.classList.toggle('mswide', r[0] === 'slides' && r[1] === 'p');
     if (r[0] !== 'slides') return;
-    if (r[1] === 'p') { if (ms.deck && ms.deck.id === r[2]) redraw(); return; }
+    if (r[1] === 'p') { if (ms.deck && ms.deck.id === r[2]) { ms.bodyStep = 0; redraw(); } return; }
     if (ms.list === null || Date.now() - ms.listAt > 20000) loadList().then(() => { if (route()[0] === 'slides' && !route()[1]) { document.getElementById('main').innerHTML = homeHtml(); } });
   }
   function redraw(parts = 'tlcr') {
-    if (!document.getElementById('msb')) return; const d = ms.deck;
+    if (!document.getElementById('msb')) return; const d = ms.deck, body = $('#msBody');
     if (ms.sel >= d.slides.length) ms.sel = Math.max(0, d.slides.length - 1);
-    if (!ms.tab) ms.tab = d.slides.length > 1 ? 'slides' : 'content';
+    if (!ms.step) ms.step = d.slides.length > 1 ? 2 : 1;
     if (parts.includes('t')) $('#msTop').innerHTML = topHtml();
-    if (parts.includes('l')) $('#msLeft').innerHTML = leftHtml();
-    if (parts.includes('c')) $('#msCenter').innerHTML = centerHtml();
-    if (parts.includes('r')) $('#msRight').innerHTML = rightHtml();
-    hydrate(document.getElementById('msb'));
-    if (parts.includes('l') && ms.tab === 'content') lazyThumbs();
+    if (ms.step === 2) {
+      if (!$('#msLeft')) { body.innerHTML = '<div class="msgrid"><aside class="msleft card" id="msLeft"></aside><section class="mscenter" id="msCenter"></section><aside class="msright card" id="msRight"></aside></div>'; parts += 'lcr'; }
+      if (parts.includes('l')) $('#msLeft').innerHTML = leftHtml();
+      if (parts.includes('c')) $('#msCenter').innerHTML = centerHtml();
+      if (parts.includes('r')) $('#msRight').innerHTML = rightHtml();
+    } else if (/[lcr]/.test(parts) || ms.bodyStep !== ms.step) {
+      const st = body.scrollTop; body.innerHTML = ms.step === 1 ? contentStep() : exportStep();
+    }
+    ms.bodyStep = ms.step; hydrate(document.getElementById('msb'));
+    if (ms.step === 1) lazyThumbs();
     if (ms.aid && !ms.ncache.has(ms.aid) && !ms.libBusy) { ms.libBusy = true; getN(ms.aid).catch(e => toast(e.message, 'err')).finally(() => { ms.libBusy = false; redraw('l'); checkStale(); }); }
   }
-  const dur = d => { const n = d.slides.length, est = Math.round(n * 1.5); return `${n} slide${n === 1 ? '' : 's'} · about ${est} min at ~1.5 min per slide${d.duration ? ` (slot: ${d.duration} min)` : ''}`; };
+  const dur = d => { const n = d.slides.length, est = Math.round(n * 1.5); return `${n} slide${n === 1 ? '' : 's'} · about ${est} min${d.duration ? ` (your slot: ${d.duration} min)` : ''}`; };
   function topHtml() {
-    const d = ms.deck, over = d.targetSlides && d.slides.length > d.targetSlides, long = d.duration && d.slides.length * 1.5 > d.duration * 1.15;
-    return `<a class="btn sm" href="#/slides">← Meeting Slides</a>
-      <input class="mstitle" id="msTitle" value="${esc(d.title)}" maxlength="120" aria-label="Presentation title">
-      <span class="meta mssave" id="msSave">${esc(ms.status || 'Saved')}</span>
-      <div class="spacer"></div>
-      <span class="meta msdur ${over || long ? 'warn' : ''}" title="Rough guide only">${esc(dur(d))}${over ? ` · over the ${d.targetSlides}-slide target` : ''}</span>
-      <button class="btn sm" data-ms="undo" ${ms.undo.length ? '' : 'disabled'} title="Undo (Ctrl+Z)">↶ Undo</button><button class="btn sm" data-ms="redo" ${ms.redo.length ? '' : 'disabled'} title="Redo (Ctrl+Y)">↷ Redo</button>
-      <button class="btn sm" data-ms="show">▶ Preview</button><button class="btn sm" data-ms="save">${lockedDemo() ? '🔒 ' : ''}Save</button>
-      <button class="btn primary" data-ms="make">Make Slides</button>
-      <button class="btn ${d.slides.length ? 'primary' : ''}" data-ms="gexport" ${d.slides.length ? '' : 'disabled'}>Export to Google Slides</button><button class="btn sm" data-ms="pptx" ${d.slides.length ? '' : 'disabled'}>Download .pptx</button>`;
+    const d = ms.deck, ready = d.slides.length > 0, step = ms.step;
+    const pill = (n, label) => `<button type="button" class="stp ${step === n ? 'on' : ''}" data-ms="step" data-t="${n}"><span>${n}</span>${label}</button>`;
+    const main = step === 1 ? `<button class="btn primary" data-ms="make">${ready ? 'Add these to the presentation' : 'Make slides'} →</button>` : step === 2 ? '<button class="btn primary" data-ms="step" data-t="3">Export →</button>' : '';
+    return `<a class="btn sm" href="#/slides">← Back</a><input class="mstitle" id="msTitle" value="${esc(d.title)}" maxlength="120" aria-label="Presentation title"><span class="meta mssave" id="msSave">${esc(ms.status || 'Saved')}</span><span class="badge exp" title="New and still being tested. Check every slide before you present; Google Slides export needs a one-time setup.">Experimental</span>
+      <div class="steps">${pill(1, 'Choose content')}${pill(2, 'Edit slides')}${pill(3, 'Export')}</div><div class="spacer"></div>${main}`;
   }
-  /* ---- left: slides / content ---- */
+  /* ---- step 2, left: slide thumbnails ---- */
   function leftHtml() {
-    const d = ms.deck;
-    return `<div class="tabs mstabs"><a class="tab ${ms.tab === 'slides' ? 'on' : ''}" data-ms="ltab" data-t="slides">Slides (${d.slides.length})</a><a class="tab ${ms.tab === 'content' ? 'on' : ''}" data-ms="ltab" data-t="content">Content</a></div>${ms.tab === 'slides' ? slidesTab() : contentTab()}`;
-  }
-  function slidesTab() {
     const d = ms.deck, stale = Object.keys(ms.stale).length;
-    return `<div class="thumbs" id="thumbs">${d.slides.map((s, i) => thumb(s, i)).join('') || '<div class="meta" style="padding:10px">No slides yet. Open the Content tab, tick plots or text, then press <b>Make Slides</b>, or add a slide yourself.</div>'}</div>
-      <div class="lactions"><button class="btn sm" data-ms="addslide">+ Add slide</button>${d.slides.length ? '<button class="btn sm danger" data-ms="clear">Clear all</button>' : ''}</div>${stale ? `<div class="meta warnline">${stale} slide${stale === 1 ? ' has' : 's have'} a plot with a newer version.</div>` : ''}`;
+    return `<div class="thumbs" id="thumbs">${d.slides.map((s, i) => thumb(s, i)).join('')}</div>
+      <div class="lactions"><button class="btn sm" data-ms="addslide">+ Add a slide</button><button class="btn sm" data-ms="step" data-t="1">+ More content</button></div>${stale ? `<div class="meta warnline">${stale} slide${stale === 1 ? ' has' : 's have'} a plot with a newer version.</div>` : ''}<p class="meta" style="margin:8px 2px 0">Drag a slide to move it.</p>`;
   }
   function thumb(s, i) {
     const t = slideHtml(s, ms.deck, {number: i + 1}), flags = (t.warn.length ? '<span class="dot w" title="Layout warnings"></span>' : '') + (ms.stale[s.id] ? '<span class="dot n" title="A newer plot version exists"></span>' : '');
     return `<div class="msthumb ${i === ms.sel ? 'sel' : ''}" draggable="true" data-ms="pick" data-i="${i}"><span class="tn">${i + 1}</span><div class="tp">${t.html}</div>${flags}</div>`;
   }
-  /* library */
+  /* library helpers */
   const verLabel2 = v => v.rev ? `v${v.num}.${v.rev}` : `v${v.num}`;
   const verSort = (a, b) => a.num - b.num || a.rev - b.rev;
   const catPath2 = (N, id) => { const out = []; let c = N.cats.find(x => x.id === id); while (c) { out.unshift(c.name); c = c.parentId ? N.cats.find(x => x.id === c.parentId) : null; } return out.join(' / '); };
   const libPlots = N => N.plots.map(p => ({p, vs: N.versions.filter(v => v.plotId === p.id).sort(verSort)})).filter(r => r.vs.length).sort((a, b) => catPath2(N, a.p.catId).localeCompare(catPath2(N, b.p.catId), undefined, {numeric: true}) || a.p.name.localeCompare(b.p.name, undefined, {numeric: true}));
-  function contentTab() {
-    const d = ms.deck, aid = ms.aid, lib = aid && ms.ncache.get(aid);
-    const srcSel = `<div class="srcsel"><label class="meta">Plots come from</label><select data-ms="src" aria-label="Analysis to take plots from"><option value="">— no analysis —</option>${AL.map(a => `<option value="${a.id}" ${a.id === aid ? 'selected' : ''}>${esc(a.title)}</option>`).join('')}</select></div>`;
-    const sub = `<div class="chips msc">${[['plots', 'Plots'], ['text', 'Text'], ['uploads', 'Uploads'], ['review', 'Review (optional)']].map(([k, l]) => `<span class="chip ${ms.ctab === k ? 'on' : ''}" data-ms="ctab" data-t="${k}">${l}</span>`).join('')}</div>`;
-    let body = '';
-    if (ms.ctab === 'plots') {
-      if (!aid) body = '<div class="meta" style="padding:8px 0">Choose an analysis above to use its plots, or use the Uploads and Text tabs for your own material.</div>';
-      else if (!lib) body = '<div class="meta" style="padding:8px 0">Loading plots…</div>';
-      else {
-        const rows = libPlots(lib.N), cats = [...new Set(rows.map(r => r.p.catId))];
-        const q = ms.q.toLowerCase(), shown = rows.filter(r => (!ms.cat || r.p.catId === ms.cat) && (!q || r.p.name.toLowerCase().includes(q) || catPath2(lib.N, r.p.catId).toLowerCase().includes(q)));
-        const n = Object.keys(ms.picks).length; let last = null;
-        body = `<div class="libbar"><input type="search" id="msq" placeholder="Search plots…" value="${esc(ms.q)}"><select data-ms="cat"><option value="">All categories</option>${cats.map(c => `<option value="${c}" ${ms.cat === c ? 'selected' : ''}>${esc(catPath2(lib.N, c) || 'No category')}</option>`).join('')}</select></div>
-          <div class="libtools"><button class="btn sm" data-ms="pickall">Select shown</button><button class="btn sm" data-ms="pickno">Clear</button><span class="meta" id="pickn">${n} selected</span></div>
-          <div class="liblist">${shown.map(({p, vs}) => { let h = ''; if (p.catId !== last) { last = p.catId; h = `<div class="slhead">${esc(catPath2(lib.N, p.catId) || 'No category')}</div>`; }
-            const cur = ms.picks[p.id] || vs[vs.length - 1].id;
-            return h + `<div class="librow"><label><input type="checkbox" data-ms="pickp" data-id="${p.id}" ${ms.picks[p.id] ? 'checked' : ''}><span class="th" data-thumb="${p.id}"></span><span class="nm">${esc(p.name)}</span></label><select data-ms="pickv" data-id="${p.id}" aria-label="Version of ${esc(p.name)}">${[...vs].reverse().map((v, i) => `<option value="${v.id}" ${v.id === cur ? 'selected' : ''}>${verLabel2(v)}${i === 0 ? ' (latest)' : ''}${v.anvId ? '' : ' · draft'}</option>`).join('')}</select><button class="btn sm" data-ms="look" data-id="${p.id}" title="Preview">👁</button></div>`; }).join('') || '<div class="meta">No plots match.</div>'}</div>`;
-      }
-    } else if (ms.ctab === 'text') {
-      body = `<div class="meta" style="margin-bottom:6px">Write text once, tick it, and Make Slides turns it into a text slide. One bullet per line.</div>
-        ${d.blocks.map(b => `<div class="blk"><label><input type="checkbox" data-ms="pickb" data-id="${b.id}" ${ms.blocksSel.has(b.id) ? 'checked' : ''}> <b>${esc(b.title || 'Untitled')}</b></label><div class="meta">${esc(cutT(b.body, 90))}</div><div class="actions"><button class="btn sm" data-ms="editb" data-id="${b.id}">Edit</button><button class="btn sm danger" data-ms="delb" data-id="${b.id}">Delete</button></div></div>`).join('')}
-        <button class="btn sm" data-ms="newb">+ New text block</button>`;
-    } else if (ms.ctab === 'uploads') {
-      body = `<div class="meta" style="margin-bottom:6px">Your own figures (PNG, JPG, GIF, WebP, SVG). They are stored with this presentation.</div>
-        ${d.uploads.map(u => `<div class="librow"><label><input type="checkbox" data-ms="picku" data-id="${u.fileId}" ${ms.upSel.has(u.fileId) ? 'checked' : ''}><span class="th" data-thumbu="${u.fileId}"></span><span class="nm">${esc(u.name)}</span></label></div>`).join('')}
-        <label class="btn sm upbtn">+ Upload figures<input type="file" id="msup" accept="image/*" multiple hidden></label>`;
-    } else {
-      const N = lib && lib.N, ro = N ? reviewData(N) : null;
-      body = `<div class="notice">Optional. Nothing from the review system is added unless you tick it here. A deck needs none of it.</div>${!N ? '<div class="meta">Choose an analysis first.</div>' : `
-        <label class="rvrow"><input type="checkbox" data-ms="rev" data-k="open" ${ms.rev.open ? 'checked' : ''}> <span><b>Summary of unresolved review comments</b><br><span class="meta">${ro.open.length} open comment${ro.open.length === 1 ? '' : 's'} listed as written, with their location</span></span></label>
-        <label class="rvrow"><input type="checkbox" data-ms="rev" data-k="decisions" ${ms.rev.decisions ? 'checked' : ''}> <span><b>Decisions on responses</b><br><span class="meta">${ro.decisions.length} accepted or discarded response${ro.decisions.length === 1 ? '' : 's'}, with the recorded reason</span></span></label>
-        <label class="rvrow"><input type="checkbox" data-ms="rev" data-k="changes" ${ms.rev.changes ? 'checked' : ''}> <span><b>Latest plot changes</b><br><span class="meta">${ro.changes.length} plot version${ro.changes.length === 1 ? '' : 's'} since the last published AN version, with what changed</span></span></label>`}`;
+  /* ---- step 1: choose content ---- */
+  function contentStep() {
+    const d = ms.deck, aid = ms.aid, lib = aid && ms.ncache.get(aid), o = ms.opt;
+    const nP = Object.keys(ms.picks).length, nB = ms.blocksSel.size, nU = ms.upSel.size;
+    const srcSel = `<div class="srcsel"><label for="mssrc"><b>Plots from</b></label><select id="mssrc" data-ms="src"><option value="">— none: I will use my own text and figures —</option>${AL.map(a => `<option value="${a.id}" ${a.id === aid ? 'selected' : ''}>${esc(a.title)}</option>`).join('')}</select></div>`;
+    let plots = '';
+    if (aid && !lib) plots = '<div class="meta" style="padding:8px 0">Loading plots…</div>';
+    else if (lib) {
+      const rows = libPlots(lib.N), cats = [...new Set(rows.map(r => r.p.catId))], q = ms.q.toLowerCase();
+      const shown = rows.filter(r => (!ms.cat || r.p.catId === ms.cat) && (!q || r.p.name.toLowerCase().includes(q) || catPath2(lib.N, r.p.catId).toLowerCase().includes(q))); let last = null;
+      plots = `<div class="libbar"><input type="search" id="msq" placeholder="Search plots…" value="${esc(ms.q)}">${cats.length > 1 ? `<select data-ms="cat" aria-label="Category"><option value="">All categories</option>${cats.map(c => `<option value="${c}" ${ms.cat === c ? 'selected' : ''}>${esc(catPath2(lib.N, c) || 'No category')}</option>`).join('')}</select>` : ''}<button class="btn sm" data-ms="pickall">Tick all shown</button><button class="btn sm" data-ms="pickno">Clear</button></div>
+        <div class="liblist plotlist">${shown.map(({p, vs}) => { let h = ''; if (p.catId !== last) { last = p.catId; h = `<div class="slhead">${esc(catPath2(lib.N, p.catId) || 'No category')}</div>`; }
+          const cur = ms.picks[p.id] || vs[vs.length - 1].id;
+          return h + `<div class="librow"><label><input type="checkbox" data-ms="pickp" data-id="${p.id}" ${ms.picks[p.id] ? 'checked' : ''}><span class="th" data-thumb="${p.id}"></span><span class="nm">${esc(p.name)}</span></label>${vs.length > 1 ? `<select data-ms="pickv" data-id="${p.id}" aria-label="Version of ${esc(p.name)}">${[...vs].reverse().map((v, i) => `<option value="${v.id}" ${v.id === cur ? 'selected' : ''}>${verLabel2(v)}${i === 0 ? ' (newest)' : ''}</option>`).join('')}</select>` : `<span class="meta">${verLabel2(vs[0])}</span>`}<button class="btn sm" data-ms="look" data-id="${p.id}" title="Preview">👁</button></div>`; }).join('') || '<div class="meta" style="padding:8px">No plots match.</div>'}</div>`;
     }
-    return `<div class="contenttab">${srcSel}${sub}${body}</div>`;
+    const blocks = d.blocks.map(b => `<div class="librow"><label><input type="checkbox" data-ms="pickb" data-id="${b.id}" ${ms.blocksSel.has(b.id) ? 'checked' : ''}><span class="nm"><b>${esc(b.title || 'Untitled')}</b> <span class="meta">${esc(cutT(b.body, 60))}</span></span></label><button class="btn sm" data-ms="editb" data-id="${b.id}">Edit</button><button class="btn sm danger" data-ms="delb" data-id="${b.id}">×</button></div>`).join('');
+    const ups = d.uploads.map(u => `<div class="librow"><label><input type="checkbox" data-ms="picku" data-id="${u.fileId}" ${ms.upSel.has(u.fileId) ? 'checked' : ''}><span class="th" data-thumbu="${u.fileId}"></span><span class="nm">${esc(u.name)}</span></label></div>`).join('');
+    const ro = lib ? reviewData(lib.N) : null;
+    const rad = (k, v, t, cur) => `<label class="opt1"><input type="radio" name="o_${k}" data-ms="opt" data-k="${k}" value="${v}" ${String(cur) === String(v) ? 'checked' : ''}> ${t}</label>`;
+    return `<div class="stepwrap card"><h2>Choose what goes in your presentation</h2><p class="meta" style="margin:2px 0 12px">Tick what you want to show, then press <b>${d.slides.length ? 'Add these to the presentation' : 'Make slides'}</b> at the top right. You can change everything afterwards.</p>
+      <h3>1. Plots</h3>${srcSel}${plots || ''}
+      <h3>2. Your own text <span class="meta">(optional)</span></h3>${blocks}<button class="btn sm" data-ms="newb">+ Add a text slide</button>
+      <h3>3. Your own figures <span class="meta">(optional)</span></h3>${ups}<label class="btn sm upbtn">+ Upload a figure<input type="file" id="msup" accept="image/*" multiple hidden></label>
+      <details class="opts"><summary>More options</summary>
+        <div class="optgrp"><b>Slides for the plots</b>${rad('stype', 'auto', 'Add text next to a plot when something is recorded for it', o.stype)}${rad('stype', 'tp', 'Always leave room for text', o.stype)}${rad('stype', 'p', 'Plots only, no text', o.stype)}</div>
+        <div class="optgrp"><b>Plots on each slide</b>${rad('per', 1, '1 (clearest)', o.per)}${rad('per', 2, '2', o.per)}${rad('per', 3, '3', o.per)}${rad('per', 4, '4', o.per)}</div>
+        <div class="optgrp"><label class="opt1"><input type="checkbox" data-ms="opt" data-k="facts" ${o.facts ? 'checked' : ''}> Fill in the text from what is recorded for each plot (what changed, why, dataset)</label>
+          <label class="opt1"><input type="checkbox" data-ms="opt" data-k="tmpl" ${o.tmpl ? 'checked' : ''}> Also add the ${d.meetingType === 'collab' ? 'collaboration' : 'group'} meeting outline (empty slides with headings to fill in)</label>
+          <label class="opt1"><input type="checkbox" data-ms="opt" data-k="agenda" ${o.agenda ? 'checked' : ''}> Also add an agenda slide</label></div>
+        ${ro ? `<div class="optgrp"><b>Review comments (optional)</b><span class="meta">Nothing from the review system is added unless you tick it.</span>
+          <label class="opt1"><input type="checkbox" data-ms="rev" data-k="open" ${ms.rev.open ? 'checked' : ''}> Summary of open comments (${ro.open.length})</label>
+          <label class="opt1"><input type="checkbox" data-ms="rev" data-k="decisions" ${ms.rev.decisions ? 'checked' : ''}> Decisions on responses (${ro.decisions.length})</label>
+          <label class="opt1"><input type="checkbox" data-ms="rev" data-k="changes" ${ms.rev.changes ? 'checked' : ''}> Plot changes since the last AN version (${ro.changes.length})</label></div>` : ''}
+      </details>
+      <div class="stepfoot"><span class="meta">${nP} plot${nP === 1 ? '' : 's'}, ${nB} text slide${nB === 1 ? '' : 's'}, ${nU} figure${nU === 1 ? '' : 's'} ticked</span><button class="btn primary" data-ms="make">${d.slides.length ? 'Add these to the presentation' : 'Make slides'} →</button></div></div>`;
   }
   function lazyThumbs() {
     const lib = ms.aid && ms.ncache.get(ms.aid), ds = ms.deck;
@@ -192,55 +192,61 @@ window.MS = (() => {
   const plotSrc = (lib, p, v) => ({kind: 'plot', aid: lib.aid, plotId: p.id, verId: v.id, fileId: v.file_id, ext: v.ext || '.png', label: `${p.name} · ${verLabel2(v)}`, name: p.name});
   const upSrc = u => ({kind: 'upload', fileId: u.fileId, ext: u.ext, name: u.name, label: u.name.replace(/\.[^.]+$/, ''), deckId: u.deckId || ms.deck.id});
 
-  /* ---- centre: canvas ---- */
+  /* ---- step 2, centre: the slide ---- */
   function centerHtml() {
     const d = ms.deck, s = d.slides[ms.sel];
-    if (!s) return `<div class="card empty msempty"><h2>Your presentation is empty</h2><p>Open the <b>Content</b> tab on the left, tick the plots and text you want, then press <b>Make Slides</b>. Or add a slide by hand.</p><div class="actions" style="justify-content:center"><button class="btn primary" data-ms="make">Make Slides</button><button class="btn" data-ms="addslide">+ Add a slide</button></div></div>`;
+    if (!s) return `<div class="card empty msempty"><h2>No slides yet</h2><p>Go back to step 1, tick the plots you want, and press <b>Make slides</b>. Or add an empty slide yourself.</p><div class="actions" style="justify-content:center"><button class="btn primary" data-ms="step" data-t="1">Go to step 1</button><button class="btn" data-ms="addslide">+ Add a slide</button></div></div>`;
     const t = slideHtml(s, d, {number: ms.sel + 1, live: true}), st = ms.stale[s.id] || [];
     return `${staleBanner(st)}<div class="canvaswrap"><div class="canvas">${t.html}</div></div>
       ${t.warn.length ? `<div class="warnbox">${t.warn.map(w => `<div>⚠ ${esc(w)}</div>`).join('')}</div>` : ''}
-      <div class="canvasnav"><button class="btn sm" data-ms="prev" ${ms.sel ? '' : 'disabled'}>← Previous</button><span class="meta">Slide ${ms.sel + 1} of ${d.slides.length} · click text to edit it</span><button class="btn sm" data-ms="next" ${ms.sel < d.slides.length - 1 ? '' : 'disabled'}>Next →</button></div>`;
+      <div class="canvasnav"><button class="btn sm" data-ms="prev" ${ms.sel ? '' : 'disabled'}>← Previous</button><span class="meta">Slide ${ms.sel + 1} of ${d.slides.length} · <b>click any text to edit it</b></span><button class="btn sm" data-ms="next" ${ms.sel < d.slides.length - 1 ? '' : 'disabled'}>Next →</button></div>
+      <div class="canvasnav sub"><span><button class="btn sm" data-ms="undo" ${ms.undo.length ? '' : 'disabled'} title="Undo (Ctrl+Z)">↶ Undo</button> <button class="btn sm" data-ms="redo" ${ms.redo.length ? '' : 'disabled'} title="Redo (Ctrl+Y)">↷ Redo</button></span><span class="meta ${d.targetSlides && d.slides.length > d.targetSlides ? 'warn' : ''}">${esc(dur(d))}</span></div>`;
   }
   function staleBanner(st) {
     if (!st.length) return '';
     return st.map(x => `<div class="stale"><span><b>A newer version exists:</b> ${esc(x.src.name)} is ${esc(x.cur)} in this slide; the analysis now has <b>${esc(x.latestLabel)}</b>. Nothing was changed.</span><span class="actions"><button class="btn sm" data-ms="skeep" data-i="${x.i}">Keep ${esc(x.cur)}</button><button class="btn sm primary" data-ms="srepl" data-i="${x.i}">Replace with ${esc(x.latestLabel)}</button><button class="btn sm" data-ms="scmp" data-i="${x.i}">Compare</button></span></div>`).join('');
   }
-  /* ---- right: slide / deck ---- */
+  /* ---- step 2, right: this slide ---- */
   function rightHtml() {
-    return `<div class="tabs mstabs"><a class="tab ${ms.rtab === 'slide' ? 'on' : ''}" data-ms="rtab" data-t="slide">Slide</a><a class="tab ${ms.rtab === 'deck' ? 'on' : ''}" data-ms="rtab" data-t="deck">Deck &amp; style</a></div>${ms.rtab === 'slide' ? slidePanel() : deckPanel()}`;
-  }
-  function slidePanel() {
-    const d = ms.deck, s = d.slides[ms.sel]; if (!s) return '<div class="meta" style="padding:12px">Select or add a slide.</div>';
-    const L = D.LAYOUT[s.layout], type = L.type, imgs = s.images, slots = L.n;
+    const d = ms.deck, s = d.slides[ms.sel]; if (!s) return '<div class="meta" style="padding:12px">Add a slide to see its settings.</div>';
+    const L = D.LAYOUT[s.layout], type = L.type, imgs = s.images, slots = L.n, st = d.style, th = D.THEMES[d.theme];
     const lays = D.LAYOUTS.filter(l => l.type === type);
-    return `<div class="rp"><h3>Layout</h3>
+    const fld = (label, key, val, kind = 'text', extra = '') => `<label class="fld"><span>${label}</span><input type="${kind}" data-ms="deckf" data-k="${key}" value="${esc(val == null ? '' : val)}" ${extra}></label>`;
+    return `<div class="rp"><h3>Layout of this slide</h3>
       <div class="chips" style="margin:6px 0">${Object.entries(D.TYPES).map(([k, n]) => `<span class="chip ${type === k ? 'on' : ''}" data-ms="ltype" data-t="${k}">${n}</span>`).join('')}</div>
       <div class="layoutpick">${lays.map(l => `<div class="lp ${l.id === s.layout ? 'sel' : ''}" data-ms="layout" data-id="${l.id}" title="${esc(l.desc)}"><div class="mini">${miniLayout(l.id)}</div><span>${esc(l.name)}</span></div>`).join('')}</div>
-      <button class="btn sm" data-ms="recommend" title="Choose a layout from the number of plots and whether there is text">Recommend a layout</button>
-      ${slots || imgs.length ? `<h3 style="margin-top:14px">Plots on this slide</h3>${imgs.length ? imgs.map((im, i) => `<div class="imgrow ${i === ms.selImg ? 'sel' : ''} ${i >= slots ? 'off' : ''}" data-ms="img" data-i="${i}"><div class="nm"><b>${i + 1}.</b> ${esc(im.src.label || im.src.name || 'Plot')}${i >= slots ? ' <span class="meta">(not shown in this layout)</span>' : ''}</div>
-        <input class="cap" data-ms="cap" data-i="${i}" value="${esc(im.caption != null ? im.caption : im.src.label || '')}" placeholder="Caption" aria-label="Caption ${i + 1}"><div class="actions"><button class="btn sm" data-ms="imgrepl" data-i="${i}">Replace</button><button class="btn sm" data-ms="imgup" data-i="${i}" ${i ? '' : 'disabled'} title="Move earlier">←</button><button class="btn sm" data-ms="imgdn" data-i="${i}" ${i < imgs.length - 1 ? '' : 'disabled'} title="Move later">→</button><button class="btn sm danger" data-ms="imgrm" data-i="${i}">Remove</button></div></div>`).join('') : '<div class="meta">No plots yet.</div>'}
-        ${imgs.length < Math.max(slots, 1) || slots > imgs.length ? `<button class="btn sm" data-ms="imgadd" style="margin-top:6px">+ Add a plot</button>` : ''}` : ''}
-      <h3 style="margin-top:14px">Slide</h3><div class="actions wrap"><button class="btn sm" data-ms="dupslide">Duplicate</button><button class="btn sm" data-ms="mvup" ${ms.sel ? '' : 'disabled'}>Move up</button><button class="btn sm" data-ms="mvdn" ${ms.sel < d.slides.length - 1 ? '' : 'disabled'}>Move down</button><button class="btn sm" data-ms="addafter">+ Blank after</button><button class="btn sm" data-ms="regen" ${s.gen ? '' : 'disabled'} title="${s.gen ? 'Rebuild just this slide from its source' : 'Only slides made by Make Slides can be regenerated'}">Regenerate</button><button class="btn sm danger" data-ms="delslide">Delete</button></div>
-      <p class="meta" style="margin-top:8px">${s.gen ? 'Made by Make Slides from your selection.' : s.origin === 'template' ? 'From the meeting outline.' : 'Added by hand.'} Regenerate rebuilds only slides made by Make Slides.</p></div>`;
+      <button class="btn sm" data-ms="recommend" title="Choose a layout from the number of plots and whether there is text">Pick a layout for me</button>
+      ${slots || imgs.length ? `<h3 style="margin-top:14px">Plots on this slide</h3>${imgs.map((im, i) => `<div class="imgrow ${i === ms.selImg ? 'sel' : ''} ${i >= slots ? 'off' : ''}" data-ms="img" data-i="${i}"><div class="nm"><b>Plot ${i + 1}</b>${i >= slots ? ' <span class="meta">(not shown in this layout)</span>' : ''}</div>
+        <input class="cap" data-ms="cap" data-i="${i}" value="${esc(im.caption != null ? im.caption : im.src.label || '')}" placeholder="Caption" aria-label="Caption ${i + 1}"><div class="actions"><button class="btn sm" data-ms="imgrepl" data-i="${i}">Change plot</button><button class="btn sm danger" data-ms="imgrm" data-i="${i}">Remove</button></div></div>`).join('') || '<div class="meta">No plots on this slide.</div>'}
+        ${slots > imgs.length ? `<button class="btn sm" data-ms="imgadd" style="margin-top:6px">+ Add a plot</button>` : ''}` : ''}
+      <div class="actions wrap" style="margin-top:14px"><button class="btn sm" data-ms="dupslide">Duplicate this slide</button><button class="btn sm danger" data-ms="delslide">Delete this slide</button></div>
+      <details class="rd"><summary>More for this slide</summary><div class="actions wrap" style="margin-top:6px"><button class="btn sm" data-ms="mvup" ${ms.sel ? '' : 'disabled'}>Move up</button><button class="btn sm" data-ms="mvdn" ${ms.sel < d.slides.length - 1 ? '' : 'disabled'}>Move down</button><button class="btn sm" data-ms="addafter">+ Blank slide after</button><button class="btn sm" data-ms="regen" ${s.gen ? '' : 'disabled'} title="${s.gen ? 'Rebuild just this slide from its source' : 'Only slides made by Make slides can be rebuilt'}">Rebuild this slide</button></div></details>
+      <h3 style="margin-top:14px">Look of the presentation</h3><div class="themepick">${Object.entries(D.THEMES).map(([k, t]) => `<div class="tpk ${d.theme === k ? 'sel' : ''}" data-ms="theme" data-id="${k}" title="${esc(t.note)}"><div class="swatch" style="background:${t.bg};border-color:${t.frame}"><i style="background:${t.accent}"></i><b style="color:${t.titleFg}">Aa</b></div><span>${esc(t.name)}</span></div>`).join('')}</div>
+      <details class="rd"><summary>More style options</summary>
+        <label class="fld"><span>Font</span><select data-ms="deckf" data-k="style.font"><option value="">Theme default (${esc(th.font)})</option>${D.FONTS.map(f => `<option ${st.font === f ? 'selected' : ''}>${f}</option>`).join('')}</select></label>
+        <label class="fld"><span>Text size ${Math.round(st.scale * 100)}%</span><input type="range" min="0.8" max="1.3" step="0.05" value="${st.scale}" data-ms="deckf" data-k="style.scale" data-live="1"></label>
+        <label class="fld"><span>Space between plots</span><input type="range" min="0.08" max="0.45" step="0.01" value="${st.gap}" data-ms="deckf" data-k="style.gap" data-live="1"></label>
+        <div class="colrow"><label class="fld"><span>Accent colour</span><input type="color" data-ms="deckf" data-k="style.accent" value="${st.accent || th.accent}"></label><label class="fld"><span>Background</span><input type="color" data-ms="deckf" data-k="style.bg" value="${st.bg || th.bg}"></label><button class="btn sm" data-ms="resetcol">Reset colours</button></div>
+        <label class="fld chk"><input type="checkbox" data-ms="deckf" data-k="style.captions" ${st.captions !== false ? 'checked' : ''}> <span>Show plot captions</span></label>
+        ${fld('Footer text', 'style.footer', st.footer, 'text', 'placeholder="Title and analysis (default)"')}${fld('Experiment or institution name (optional)', 'style.branding', st.branding, 'text', 'placeholder="Only text you may use"')}
+        <p class="meta">No logos are added. Add an official logo in Google Slides if your collaboration allows it.</p></details>
+      <details class="rd"><summary>About this presentation</summary>${fld('Presenter', 'presenter', d.presenter)}${fld('Date', 'date', d.date, 'date')}${fld('Analysis name', 'analysisName', d.analysisName)}<div class="colrow">${fld('Your slot (minutes)', 'duration', d.duration || '', 'number', 'min="0" max="240"')}${fld('Target number of slides', 'targetSlides', d.targetSlides || '', 'number', 'min="0" max="200"')}</div></details>
+      <p class="meta" style="margin-top:10px">${s.gen ? 'Made by Make slides.' : s.origin === 'template' ? 'From the meeting outline.' : 'Added by hand.'}</p></div>`;
   }
-  function deckPanel() {
-    const d = ms.deck, st = d.style, th = D.THEMES[d.theme], fld = (label, key, val, type = 'text', extra = '') => `<label class="fld"><span>${label}</span><input type="${type}" data-ms="deckf" data-k="${key}" value="${esc(val == null ? '' : val)}" ${extra}></label>`;
-    return `<div class="rp"><h3>Theme</h3><div class="themepick">${Object.entries(D.THEMES).map(([k, t]) => `<div class="tpk ${d.theme === k ? 'sel' : ''}" data-ms="theme" data-id="${k}" title="${esc(t.note)}"><div class="swatch" style="background:${t.bg};border-color:${t.frame}"><i style="background:${t.accent}"></i><b style="color:${t.titleFg}">Aa</b></div><span>${esc(t.name)}</span></div>`).join('')}</div>
-      <label class="fld"><span>Font</span><select data-ms="deckf" data-k="style.font"><option value="">Theme default (${esc(th.font)})</option>${D.FONTS.map(f => `<option ${st.font === f ? 'selected' : ''}>${f}</option>`).join('')}</select></label>
-      <label class="fld"><span>Text size ${Math.round(st.scale * 100)}%</span><input type="range" min="0.8" max="1.3" step="0.05" value="${st.scale}" data-ms="deckf" data-k="style.scale" data-live="1"></label>
-      <label class="fld"><span>Plot spacing ${Math.round(st.gap * 100)} (hundredths of an inch)</span><input type="range" min="0.08" max="0.45" step="0.01" value="${st.gap}" data-ms="deckf" data-k="style.gap" data-live="1"></label>
-      <div class="colrow"><label class="fld"><span>Accent colour</span><input type="color" data-ms="deckf" data-k="style.accent" value="${st.accent || th.accent}"></label><label class="fld"><span>Background</span><input type="color" data-ms="deckf" data-k="style.bg" value="${st.bg || th.bg}"></label><button class="btn sm" data-ms="resetcol">Theme colours</button></div>
-      <label class="fld chk"><input type="checkbox" data-ms="deckf" data-k="style.captions" ${st.captions !== false ? 'checked' : ''}> <span>Show plot captions</span></label>
-      ${fld('Footer text', 'style.footer', st.footer, 'text', 'placeholder="Presentation title and analysis (default)"')}
-      ${fld('Institution or experiment name (optional)', 'style.branding', st.branding, 'text', 'placeholder="Only text you have the right to use"')}
-      <p class="meta">No logos are added. If you want an official logo, add it in Google Slides, following your collaboration's rules.</p>
-      <h3 style="margin-top:14px">About this presentation</h3>
-      ${fld('Presenter', 'presenter', d.presenter)}${fld('Date', 'date', d.date, 'date')}${fld('Analysis name', 'analysisName', d.analysisName)}
-      <div class="colrow">${fld('Slot (minutes)', 'duration', d.duration || '', 'number', 'min="0" max="240"')}${fld('Target slides', 'targetSlides', d.targetSlides || '', 'number', 'min="0" max="200"')}</div>
-      <h3 style="margin-top:14px">Versions</h3>${historyHtml()}</div>`;
+  /* ---- step 3: export ---- */
+  function exportStep() {
+    const d = ms.deck, is = issues(), n = d.slides.length;
+    return `<div class="stepwrap card"><h2>Export your presentation</h2><p class="meta" style="margin:2px 0 12px">${n} slide${n === 1 ? '' : 's'}. Pick one of the two ways below. Both give you slides you can still edit. <b>Experimental:</b> please look through every slide before you present.</p>
+      ${is.length ? `<div class="notice">${is.map(i => `<div>⚠ ${esc(i)}</div>`).join('')}<div class="meta" style="margin-top:4px">You can still export. Or go back to <a href="#" data-ms="step" data-t="2">step 2</a> to fix them.</div></div>` : ''}
+      <div class="exportcards">
+        <div class="card pad"><h3>Download PowerPoint</h3><p class="meta">A .pptx file. Works everywhere. To use it in Google Slides, upload it to Google Drive and choose <b>Open with → Google Slides</b>.</p><button class="btn primary" data-ms="pptx" ${n ? '' : 'disabled'}>Download .pptx</button></div>
+        <div class="card pad"><h3>Send to Google Slides</h3><p class="meta">Creates the presentation in your Google Drive for you. The first time, a one-time Google setup is needed; the button explains it.</p><button class="btn" data-ms="gexport" ${n ? '' : 'disabled'}>Export to Google Slides</button></div>
+      </div>
+      <div class="actions" style="margin-top:12px"><button class="btn" data-ms="show" ${n ? '' : 'disabled'}>▶ Preview all slides</button><button class="btn" data-ms="save">${lockedDemo() ? '🔒 ' : ''}Save a version</button><button class="btn" data-ms="step" data-t="2">← Back to editing</button></div>
+      <details class="opts"><summary>Saved versions and more</summary>${historyHtml()}<div style="margin-top:10px">${n ? '<button class="btn sm danger" data-ms="clear">Remove all slides</button>' : ''}</div></details></div>`;
   }
   function historyHtml() {
-    const h = [...(ms.deck.history || [])].reverse(); if (!h.length) return '<div class="meta">No saved versions yet. Press Save to keep a version you can return to.</div>';
+    const h = [...(ms.deck.history || [])].reverse(); if (!h.length) return '<div class="meta" style="margin-top:6px">No saved versions yet. Press “Save a version” to keep one you can return to.</div>';
     return h.map(e => `<div class="hist"><div><b>${esc(e.label)}</b> <span class="meta">${new Date(e.at).toLocaleString()} · ${esc(e.by || '')} · ${e.slides} slide${e.slides === 1 ? '' : 's'}</span>${e.url ? ` <a href="${esc(e.url)}" target="_blank" rel="noopener noreferrer">open in Google Slides</a>` : ''}</div>
       ${e.plots && e.plots.length ? `<details><summary class="meta">${e.plots.length} plot version${e.plots.length === 1 ? '' : 's'} used</summary><div class="meta">${e.plots.map(p => esc(p)).join('<br>')}</div></details>` : ''}${e.snapshot ? `<button class="btn sm" data-ms="restorev" data-id="${e.id}">Restore this version</button>` : ''}</div>`).join('');
   }
@@ -251,7 +257,7 @@ window.MS = (() => {
     fn(d); markDirty(); redraw(parts);
   }
   function markDirty() { ms.dirty = true; ms.status = 'Unsaved changes'; const el = document.getElementById('msSave'); if (el) el.textContent = ms.status; scheduleSave(); }
-  function scheduleSave() { clearTimeout(ms.saveTimer); if (lockedDemo()) { ms.mem.set(ms.deck.id, D.clone(ms.deck)); ms.status = 'Draft kept for this demo session (sign in to save)'; const el = document.getElementById('msSave'); if (el) el.textContent = ms.status; return; } ms.saveTimer = setTimeout(() => save(false), 4000); }
+  function scheduleSave() { clearTimeout(ms.saveTimer); if (lockedDemo()) { ms.mem.set(ms.deck.id, D.clone(ms.deck)); ms.status = 'Not saved (demo)'; const el = document.getElementById('msSave'); if (el) el.textContent = ms.status; return; } ms.saveTimer = setTimeout(() => save(false), 4000); }
   function undo() { if (!ms.undo.length) return; ms.redo.push(snap(ms.deck)); restore(ms.deck, ms.undo.pop()); markDirty(); redraw(); }
   function redo() { if (!ms.redo.length) return; ms.undo.push(snap(ms.deck)); restore(ms.deck, ms.redo.pop()); markDirty(); redraw(); }
   const cur = () => ms.deck.slides[ms.sel];
@@ -275,7 +281,7 @@ window.MS = (() => {
   async function openDeck(id) {
     try {
       let d; if (ms.mem.has(id) && lockedDemo()) d = D.clone(ms.mem.get(id)); else d = await api('GET', '/presentations/' + id);
-      ms.deck = d; ms.sel = 0; ms.selImg = -1; ms.tab = null; ms.undo = []; ms.redo = []; ms.picks = {}; ms.blocksSel = new Set(); ms.upSel = new Set(); ms.stale = {}; ms.base = d.updated || 0; ms.status = d.updated ? 'Saved' : ''; ms.rev = {open: false, changes: false, decisions: false}; ms.srcMap.clear();
+      ms.deck = d; ms.sel = 0; ms.selImg = -1; ms.step = 0; ms.bodyStep = 0; ms.undo = []; ms.redo = []; ms.picks = {}; ms.blocksSel = new Set(); ms.upSel = new Set(); ms.stale = {}; ms.base = d.updated || 0; ms.status = d.updated ? 'Saved' : ''; ms.rev = {open: false, changes: false, decisions: false}; ms.srcMap.clear();
       d.blocks = d.blocks || []; d.uploads = d.uploads || []; d.history = d.history || []; d.style = Object.assign({footer: '', branding: '', scale: 1, gap: .2, captions: true, accent: '', bg: '', font: ''}, d.style || {});
       ms.aid = d.sourceAid || null; ms.loading = false;
       if (ms.aid) await getN(ms.aid).catch(() => {});
@@ -291,19 +297,20 @@ window.MS = (() => {
     redraw('l'); if (aid) { try { await getN(aid); } catch (e) { toast(e.message, 'err'); } redraw('l'); }
   }
   function newModal(type) {
-    const aOpts = `<option value="">No analysis (general presentation)</option>${AL.map(a => `<option value="${a.id}">${esc(a.title)}</option>`).join('')}`;
-    openModal({title: 'New presentation', submit: 'Create presentation', allowDemo: true, sub: 'Only the title is needed. You can change everything later.',
-      body: `${field('Presentation title', `<input type="text" name="title" required maxlength="120" value="${esc(type === 'collab' ? 'Collaboration meeting: analysis status' : type === 'group' ? 'Group meeting update' : '')}" placeholder="e.g. Analysis status for the group meeting">`)}
-        ${field('Meeting type', radios('mtype', [['group', 'Group meeting'], ['collab', 'Collaboration meeting']], type === 'collab' ? 'collab' : 'group'), 'Sets the starting outline. It is only a template: add or remove any slide.')}
-        <div class="cols">${field('Date (optional)', `<input type="date" name="date" value="${today()}">`)}${field('Presenter (optional)', `<input type="text" name="presenter" maxlength="80" value="${esc(U ? U.name : '')}">`)}</div>
-        ${field('Subtitle (optional)', '<input type="text" name="subtitle" maxlength="160" placeholder="e.g. Progress since the last meeting">')}
-        <div class="cols">${field('Analysis name (optional)', '<input type="text" name="aname" maxlength="100" placeholder="e.g. AN-24-123">')}${field('Slot in minutes (optional)', '<input type="number" name="dur" min="0" max="240" placeholder="e.g. 20">')}</div>
-        ${field('Take plots from an existing analysis (optional)', `<select name="aid">${aOpts}</select>`, 'You can still add your own text and uploaded figures. Nothing is imported automatically.')}`,
+    const aOpts = `<option value="">No analysis: I will use my own text and figures</option>${AL.map(a => `<option value="${a.id}">${esc(a.title)}</option>`).join('')}`;
+    openModal({title: 'New presentation', submit: 'Create', allowDemo: true,
+      body: `${field('Title', `<input type="text" name="title" required maxlength="120" value="${esc(type === 'collab' ? 'Collaboration meeting: analysis status' : type === 'group' ? 'Group meeting update' : '')}" placeholder="e.g. Update for the group meeting">`)}
+        ${field('Kind of meeting', radios('mtype', [['group', 'Group meeting'], ['collab', 'Collaboration meeting']], type === 'collab' ? 'collab' : 'group'))}
+        ${field('Where do the plots come from?', `<select name="aid">${aOpts}</select>`)}
+        <details class="opts" style="margin-top:6px"><summary>More details (optional)</summary>
+          <div class="cols">${field('Date', `<input type="date" name="date" value="${today()}">`)}${field('Presenter', `<input type="text" name="presenter" maxlength="80" value="${esc(U ? U.name : '')}">`)}</div>
+          ${field('Subtitle', '<input type="text" name="subtitle" maxlength="160" placeholder="e.g. Progress since the last meeting">')}
+          <div class="cols">${field('Analysis name', '<input type="text" name="aname" maxlength="100" placeholder="e.g. AN-24-123">')}${field('Your slot in minutes', '<input type="number" name="dur" min="0" max="240" placeholder="e.g. 20">')}</div></details>`,
       onSubmit: async fd => {
         const aid = fd.get('aid') || null, an = AL.find(a => a.id === aid);
         const d = D.newDeck({title: fd.get('title').trim() || 'Untitled presentation', meetingType: fd.get('mtype'), date: fd.get('date') || '', presenter: (fd.get('presenter') || '').trim(), subtitle: (fd.get('subtitle') || '').trim(), analysisName: (fd.get('aname') || '').trim() || (an && an.an_name) || '', sourceAid: aid, duration: +fd.get('dur') || 0});
         d.slides.push(D.newSlide('t-title', {title: d.title, lead: d.subtitle, origin: 'template'}));
-        ms.deck = d; ms.sel = 0; ms.tab = 'content'; ms.undo = []; ms.redo = []; ms.picks = {}; ms.blocksSel = new Set(); ms.upSel = new Set(); ms.stale = {}; ms.aid = aid; ms.base = 0; ms.status = ''; ms.srcMap.clear(); ms.loading = false;
+        ms.deck = d; ms.sel = 0; ms.step = 1; ms.bodyStep = 0; ms.undo = []; ms.redo = []; ms.picks = {}; ms.blocksSel = new Set(); ms.upSel = new Set(); ms.stale = {}; ms.aid = aid; ms.base = 0; ms.status = ''; ms.srcMap.clear(); ms.loading = false;
         if (lockedDemo()) ms.mem.set(d.id, D.clone(d)); else { ms.dirty = true; await save(false); if (ms.status.startsWith('Not saved')) throw new Error(ms.status); }
         go('#/slides/p/' + d.id);
       }});
@@ -328,24 +335,13 @@ window.MS = (() => {
     add('What changed: ', v.changes || v.summary); add('Why: ', v.motivation); add('Dataset: ', v.dataset); add('Location in the AN: ', p.location);
     return out.join('\n');
   };
-  function makeModal() {
-    const d = ms.deck, lib = ms.aid && ms.ncache.get(ms.aid), pk = Object.keys(ms.picks), nB = ms.blocksSel.size, nU = ms.upSel.size, nR = Object.values(ms.rev).filter(Boolean).length;
-    const first = !d.slides.some(s => s.origin !== 'template' || s.layout !== 't-title');
-    openModal({title: 'Make Slides', submit: 'Add to presentation', xl: false, allowDemo: true,
-      sub: `Selected: ${pk.length} plot${pk.length === 1 ? '' : 's'}, ${nU} uploaded figure${nU === 1 ? '' : 's'}, ${nB} text block${nB === 1 ? '' : 's'}${nR ? `, ${nR} review item${nR === 1 ? '' : 's'}` : ''}. Slides are added after the ones you already have, and you can edit every one.`,
-      body: `${field('Slide type for the plots', radios('stype', [['auto', 'Automatic: text beside a plot when its facts are recorded'], ['tp', 'Text + plots'], ['p', 'Plots only']], 'auto'))}
-        ${field('Plots per slide', `<select name="per"><option value="1">1 (largest, easiest to read)</option><option value="2">2 side by side</option><option value="3">3 in a row</option><option value="4">4 in a grid</option></select>`, 'More plots per slide means smaller plots. The editor warns when they become too small to read.')}
-        <label class="chkrow"><input type="checkbox" name="facts" checked> <span>Fill the text beside each plot from what is recorded for it: what changed, why, dataset, location. Nothing is written for you.</span></label>
-        <label class="chkrow"><input type="checkbox" name="tmpl" ${first ? 'checked' : ''}> <span>Add the ${d.meetingType === 'collab' ? 'collaboration' : 'group'} meeting outline: title, agenda and headed text slides for you to fill in</span></label>
-        <label class="chkrow"><input type="checkbox" name="agenda" ${first ? 'checked' : ''}> <span>Add an agenda made from the slide titles</span></label>
-        <div class="meta" id="mkcount"></div>`,
-      setup: f => { const upd = () => { const per = +f.per.value || 1, nplots = pk.length + nU, nslides = Math.ceil(nplots / per) + nB + nR + (f.tmpl.checked ? (d.meetingType === 'collab' ? 8 : 5) : 0) + (f.agenda.checked ? 1 : 0); $('#mkcount', f).textContent = nplots || nB || nR || f.tmpl.checked ? `About ${nslides} slide${nslides === 1 ? '' : 's'} will be added.` : 'Nothing is selected yet. Tick plots, text or review items on the Content tab, or add the meeting outline.'; }; f.addEventListener('change', upd); upd(); },
-      onSubmit: async fd => {
-        const opt = {stype: fd.get('stype'), per: +fd.get('per') || 1, facts: !!fd.get('facts'), tmpl: !!fd.get('tmpl'), agenda: !!fd.get('agenda')};
-        const slides = generate(opt); if (!slides.length) throw new Error('Nothing to add. Tick some content first, or choose the meeting outline.');
-        mut(dd => { const had = dd.slides.length; dd.slides.push(...slides); ms.sel = had; ms.tab = 'slides'; });
-        setTimeout(checkStale, 0); toast(`${slides.length} slide${slides.length === 1 ? '' : 's'} added. Click any text to edit it.`);
-      }});
+  function doMake() {                                 // Make slides: uses the ticked content and the options from step 1
+    const d = ms.deck, o = ms.opt, opt = {stype: o.stype, per: +o.per || 1, facts: !!o.facts, tmpl: !!o.tmpl, agenda: !!o.agenda};
+    const slides = generate(opt);
+    if (!slides.length) { toast('Tick at least one plot, text slide or figure first.'); return; }
+    mut(dd => { const had = dd.slides.length; dd.slides.push(...slides); ms.sel = had; ms.step = 2; });
+    setTimeout(checkStale, 0); toast(`${slides.length} slide${slides.length === 1 ? '' : 's'} added. Click any text on a slide to edit it.`);
+    window.scrollTo(0, 0);
   }
   function plotSlides(opt, items, lib) {            // items: [{p, v}]
     const out = []; const per = opt.per;
@@ -478,14 +474,14 @@ window.MS = (() => {
 
   /* ============================ small modals ============================ */
   function blockModal(b) {
-    openModal({title: b ? 'Edit text block' : 'New text block', submit: 'Save', allowDemo: true, body: `${field('Slide title', `<input type="text" name="t" required maxlength="120" value="${esc(b ? b.title : '')}" placeholder="e.g. Analysis objectives">`)}${field('Text', `<textarea name="b" rows="7" placeholder="One bullet per line">${esc(b ? b.body : '')}</textarea>`, 'One bullet per line.')}`,
+    openModal({title: b ? 'Edit text block' : 'New text block', submit: 'Save', allowDemo: true, body: `${field('Slide title', `<input type="text" name="t" required maxlength="120" value="${esc(b ? b.title : '')}" placeholder="e.g. Analysis objectives">`)}${field('Text', `<textarea name="b" rows="8" data-indent placeholder="One bullet per line">${esc(b ? b.body : '')}</textarea>`, 'One bullet per line. For a sub-point under a bullet, press Tab at the start of the line (Shift+Tab to undo), or type two spaces first.')}`,
       onSubmit: async fd => mut(d => { if (b) { const x = d.blocks.find(q => q.id === b.id); x.title = fd.get('t').trim(); x.body = fd.get('b'); } else { const nb = {id: D.uid(), title: fd.get('t').trim(), body: fd.get('b')}; d.blocks.push(nb); ms.blocksSel.add(nb.id); } }, 'l')});
   }
   function addSlideModal(after) {
     openModal({title: 'Add a slide', submit: 'Add slide', allowDemo: true, sub: 'Choose a kind and a layout. You can change the layout later.', body: `${field('Kind', radios('k', Object.entries(D.TYPES).map(([k, n]) => [k, n]), 'tp'))}<div id="lpick" class="layoutpick"></div><input type="hidden" name="lid" value="tp-left">`,
       setup: f => { const draw = () => { const k = f.k.value, cur = f.lid.value; $('#lpick', f).innerHTML = D.LAYOUTS.filter(l => l.type === k).map(l => `<div class="lp ${l.id === cur ? 'sel' : ''}" data-lid="${l.id}"><div class="mini">${miniLayout(l.id)}</div><span>${esc(l.name)}</span></div>`).join(''); };
         f.querySelectorAll('[name=k]').forEach(r => r.addEventListener('change', () => { f.lid.value = D.LAYOUTS.find(l => l.type === f.k.value).id; draw(); })); f.addEventListener('click', e => { const c = e.target.closest('[data-lid]'); if (c) { f.lid.value = c.dataset.lid; draw(); } }); draw(); },
-      onSubmit: async fd => mut(d => { const at = after ? ms.sel + 1 : d.slides.length; d.slides.splice(at, 0, D.newSlide(fd.get('lid'))); ms.sel = at; ms.tab = 'slides'; })});
+      onSubmit: async fd => mut(d => { const at = after ? ms.sel + 1 : d.slides.length; d.slides.splice(at, 0, D.newSlide(fd.get('lid'))); ms.sel = at; ms.step = 2; })});
   }
   function chooseImage(done) {                       // pick a plot or an uploaded figure for a slot
     const lib = ms.aid && ms.ncache.get(ms.aid), rows = lib ? libPlots(lib.N) : [], ups = ms.deck.uploads;
@@ -501,7 +497,7 @@ window.MS = (() => {
       try {
         if (lockedDemo()) { ext = /png/.test(f.type) ? '.png' : /jpe?g/.test(f.type) ? '.jpg' : /gif/.test(f.type) ? '.gif' : /webp/.test(f.type) ? '.webp' : /svg/.test(f.type) ? '.svg' : null; if (!ext) throw new Error('Unsupported file type'); fid = 'local' + D.uid(); ms.local[fid] = URL.createObjectURL(f); }
         else { const r = await api('POST', `/presentations/${ms.deck.id}/upload`, undefined, {raw: f}); fid = r.file_id; ext = r.ext; }
-        mut(d => { d.uploads.push({fileId: fid, ext, name: f.name, size: f.size, deckId: d.id}); ms.upSel.add(fid); ms.ctab = 'uploads'; }, 'l');
+        mut(d => { d.uploads.push({fileId: fid, ext, name: f.name, size: f.size, deckId: d.id}); ms.upSel.add(fid); }, 'l');
       } catch (e) { toast(`${f.name}: ${e.message}`, 'err', 8000); }
     }
   }
@@ -510,6 +506,7 @@ window.MS = (() => {
   /* ============================ actions ============================ */
   const A = {
     new: el => newModal(el.dataset.type),
+    expok: () => { try { localStorage.setItem('at_exp_ok', '1'); } catch {} const n = document.getElementById('expnote'); if (n) n.remove(); },
     open: el => go('#/slides/p/' + el.dataset.id),
     ren: el => { const p = ms.list.find(x => x.id === el.dataset.id); promptName('Rename presentation', p.title, async n => { if (lockedDemo()) { ms.mem.get(p.id).title = n; await loadList(); document.getElementById('main').innerHTML = homeHtml(); return; } const d = await api('GET', '/presentations/' + p.id); d.title = n; await api('POST', '/presentations', {deck: d, base_updated: d.updated}); ms.list = null; await loadList(true); document.getElementById('main').innerHTML = homeHtml(); }); },
     dup: async el => {
@@ -522,12 +519,11 @@ window.MS = (() => {
       } catch (e) { toast(e.message, 'err'); } finally { done(); }
     },
     del: el => { const p = ms.list.find(x => x.id === el.dataset.id); confirmBox('Delete presentation', `Delete <b>${esc(p.title)}</b>? Its saved versions and uploaded figures are removed too. GitHub keeps the history, so it can be restored from there.`, 'Delete', async () => { if (lockedDemo()) ms.mem.delete(p.id); else await api('DELETE', '/presentations/' + p.id); ms.list = null; await loadList(true); document.getElementById('main').innerHTML = homeHtml(); }); },
-    ltab: el => { ms.tab = el.dataset.t; redraw('l'); },
-    ctab: el => { ms.ctab = el.dataset.t; redraw('l'); },
-    rtab: el => { ms.rtab = el.dataset.t; redraw('r'); },
+    step: el => { ms.step = +el.dataset.t; ms.selImg = -1; redraw('tlcr'); window.scrollTo(0, 0); },
+    opt: el => { const k = el.dataset.k; ms.opt[k] = el.type === 'checkbox' ? el.checked : (k === 'per' ? +el.value : el.value); },
     pick: el => { ms.sel = +el.dataset.i; ms.selImg = -1; redraw('lcr'); },
     prev: () => { ms.sel = Math.max(0, ms.sel - 1); ms.selImg = -1; redraw('lcr'); }, next: () => { ms.sel = Math.min(ms.deck.slides.length - 1, ms.sel + 1); ms.selImg = -1; redraw('lcr'); },
-    undo, redo, make: () => makeModal(), show: slideshow, save: () => save(true), pptx: () => precheck(doPptx), pptx2: () => { document.querySelector('.overlay')?.remove(); precheck(doPptx); }, gexport: () => precheck(runGoogle), gsetup: () => { document.querySelector('.overlay')?.remove(); googleSetup(); },
+    undo, redo, make: () => doMake(), show: slideshow, save: () => save(true), pptx: () => precheck(doPptx), pptx2: () => { document.querySelector('.overlay')?.remove(); precheck(doPptx); }, gexport: () => precheck(runGoogle), gsetup: () => { document.querySelector('.overlay')?.remove(); googleSetup(); },
     src: el => setSource(el.value), cat: el => { ms.cat = el.value; redraw('l'); },
     pickp: el => { const lib = ms.ncache.get(ms.aid), id = el.dataset.id; if (el.checked) { const vs = lib.N.versions.filter(v => v.plotId === id).sort(verSort); const sel = el.closest('.librow').querySelector('select'); ms.picks[id] = sel.value || vs[vs.length - 1].id; } else delete ms.picks[id]; const n = document.getElementById('pickn'); if (n) n.textContent = Object.keys(ms.picks).length + ' selected'; },
     pickv: el => { const id = el.dataset.id; if (ms.picks[id]) ms.picks[id] = el.value; },
@@ -588,7 +584,12 @@ window.MS = (() => {
   document.addEventListener('focusout', e => {
     const t = e.target; if (!t.matches || !t.matches('.msslide.live [contenteditable]') || !ms.deck) return;
     const key = t.dataset.key, raw = t.innerText.replace(/ /g, ' '), single = ['title', 'lead', 'head', 'head2'].includes(key) || key.startsWith('cap:');
-    const val = single ? raw.replace(/\s*\n+\s*/g, ' ').trim() : raw.split('\n').map(s => s.replace(/^\s*(?:[-•*☐]|\d+[.)])\s+/, '').trim()).filter(Boolean).join('\n');
+    let val;
+    if (single) val = raw.replace(/\s*\n+\s*/g, ' ').trim();
+    else {
+      const kids = [...t.children].filter(n => n.tagName === 'DIV'), arr = kids.length ? kids.flatMap(n => n.innerText.replace(/\u00a0/g, ' ').split('\n').map(s => ({lvl: +n.dataset.lvl || 0, s}))) : raw.split('\n').map(s => ({lvl: 0, s}));
+      val = arr.map(({lvl, s}) => { const m = /^(\s*)(?:(?:[-•*☐]|\d+[.)])\s+)?(.*)$/.exec(s), L = Math.min(2, lvl + Math.floor(m[1].replace(/\t/g, '  ').length / 2)), tx = m[2].trim(); return tx ? '  '.repeat(L) + tx : ''; }).filter(Boolean).join('\n');
+    }
     const s = cur(), old = key.startsWith('cap:') ? ((s.images[+key.slice(4)] || {}).caption) : s[key];
     const before = key.startsWith('cap:') ? (old != null ? old : (s.images[+key.slice(4)].src.label || '')) : (old || '');
     if (val === before) { redraw('c'); return; }
@@ -596,6 +597,21 @@ window.MS = (() => {
     if (key.startsWith('cap:')) s.images[+key.slice(4)].caption = val; else s[key] = val;
     markDirty(); redraw('tlcr');
   });
+  /* Tab makes the bullet you are in a sub-point, Shift+Tab undoes it (on the slide, and in the text-block form) */
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Tab') return; const t = e.target;
+    if (t.matches && t.matches('textarea[data-indent]')) {
+      e.preventDefault(); const v = t.value, s = t.selectionStart, ls = v.lastIndexOf('\n', s - 1) + 1;
+      if (e.shiftKey) { const m = /^( {1,2}|\t)/.exec(v.slice(ls)); if (m) { t.value = v.slice(0, ls) + v.slice(ls + m[0].length); t.selectionStart = t.selectionEnd = Math.max(ls, s - m[0].length); } }
+      else if (!/^( {4}|\t\t)/.test(v.slice(ls))) { t.value = v.slice(0, ls) + '  ' + v.slice(ls); t.selectionStart = t.selectionEnd = s + 2; }
+      return;
+    }
+    if (!(t.matches && t.matches('.msslide.live .mst[contenteditable]') && ['body', 'body2'].includes(t.dataset.key))) return;
+    e.preventDefault(); const sel = getSelection(); let n = sel.anchorNode; while (n && n !== t && !(n.nodeType === 1 && n.parentNode === t)) n = n.parentNode;
+    if (!n || n === t || n.tagName !== 'DIV') return;
+    const l = Math.max(0, Math.min(2, (+n.dataset.lvl || 0) + (e.shiftKey ? -1 : 1))); n.dataset.lvl = l; n.style.paddingLeft = ccq(.34 + l * .4);
+    if (n.dataset.num) { if (l) { n.classList.remove('num'); n.dataset.bu = '–'; } else { n.classList.add('num'); delete n.dataset.bu; } } else if (n.dataset.bu !== undefined) n.dataset.bu = l ? '–' : '•';
+  }, true);
   document.addEventListener('keydown', e => {
     if (!ms.deck || route()[0] !== 'slides' || route()[1] !== 'p') return; if (document.querySelector('.overlay')) return;
     const inText = e.target.matches && e.target.matches('input,textarea,[contenteditable]');

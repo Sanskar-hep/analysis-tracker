@@ -514,8 +514,8 @@ details.resp>summary{cursor:pointer;padding:8px 12px;font-size:13px;font-weight:
 .mst{display:flex;flex-direction:column;overflow:hidden;line-height:1.2;outline:none;white-space:pre-wrap;word-break:break-word}
 .msslide.live .mst[contenteditable]{cursor:text}.msslide.live .mst[contenteditable]:hover{outline:1px dashed #7f93b8}.msslide.live .mst[contenteditable]:focus{outline:2px solid var(--acc)}
 .msp{white-space:pre-wrap}
-.msp[data-bu]::before{content:attr(data-bu);display:inline-block;width:2.1cqw;text-indent:0}
-.mst.numbered{counter-reset:n}.msp.num::before{counter-increment:n;content:counter(n) '.';display:inline-block;width:2.1cqw;text-indent:0}
+.msp[data-bu]::before{content:attr(data-bu);display:inline-block;width:2.55cqw;text-indent:0}
+.mst.numbered{counter-reset:n}.msp.num::before{counter-increment:n;content:counter(n) '.';display:inline-block;width:2.55cqw;text-indent:0}
 .mst.empty::before{content:attr(data-ph);color:#94a3b8;font-style:italic;font-size:1.7cqw}
 .msimg{display:flex;align-items:center;justify-content:center;border:1px solid;padding:.4cqw;overflow:hidden;box-sizing:border-box}.msimg img{max-width:100%;max-height:100%;object-fit:contain;display:block}.msimg img.bad{opacity:.3}
 .msslide.live .msimg{cursor:pointer}.msimg.sel{outline:3px solid var(--acc);outline-offset:-1px}
@@ -550,3 +550,23 @@ details.resp>summary{cursor:pointer;padding:8px 12px;font-size:13px;font-weight:
 .tour-card h4{margin:6px 0 4px;font-size:16px}.tour-card p{margin:0 0 10px;font-size:14px;line-height:1.55}.tour-card code{background:var(--soft);padding:0 4px;border-radius:4px}
 .tc-top{display:flex;justify-content:space-between;align-items:center;gap:8px}.tc-count{font-size:12px;color:var(--mut)}.tc-x{border:0;background:none;font-size:20px;line-height:1;cursor:pointer;color:var(--mut)}
 .tc-nav{display:flex;justify-content:space-between;gap:8px;margin-top:6px}
+
+/* Meeting Slides: simple three-step layout */
+.steps{display:flex;gap:6px;flex-wrap:wrap}.stp{display:flex;align-items:center;gap:7px;border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:30px;padding:5px 14px 5px 6px;cursor:pointer;font-weight:500}
+.stp span{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--line);font-size:12px;font-weight:700}.stp.on{border-color:var(--acc);background:var(--soft);color:var(--acc)}.stp.on span{background:var(--acc);color:var(--acc-ink)}
+.stepwrap{padding:20px 22px;max-width:980px;margin:0 auto}.stepwrap h2{font-size:20px;margin-bottom:2px}.stepwrap h3{margin:18px 0 8px;font-size:15px}
+.stepfoot{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-top:18px;padding-top:12px;border-top:1px solid var(--line)}
+.plotlist{max-height:360px;overflow:auto;border:1px solid var(--line);border-radius:10px;margin-top:6px}.libbar{display:flex;gap:6px;flex-wrap:wrap;align-items:center}.libbar input{flex:1;min-width:140px}.libbar select{width:auto}
+details.opts,details.rd{margin-top:14px;border:1px solid var(--line);border-radius:10px;padding:8px 12px}details.opts summary,details.rd summary{cursor:pointer;font-weight:600;color:var(--mut)}
+.optgrp{display:grid;gap:5px;margin:10px 0}.opt1{display:flex;gap:8px;align-items:flex-start;font-size:13.5px;cursor:pointer}
+.exportcards{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}.exportcards .card.pad{padding:16px;display:grid;gap:8px;align-content:start}
+.canvasnav.sub{margin-top:4px}
+.srcsel{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:4px 0 8px}.srcsel select{flex:1;min-width:200px}
+.srcsel select,.librow select,.libbar select,.mstitle,.imgrow .cap{background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:6px 8px}
+.mstitle{min-width:140px;max-width:260px;border-color:transparent;background:transparent}.mstitle:hover,.mstitle:focus{border-color:var(--line);background:var(--bg)}
+.msbar-top .mssave{white-space:nowrap}
+.badge.exp{background:#ede9fe;color:#5b21b6;border:1px solid #c4b5fd;font-size:10.5px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;margin-left:8px;vertical-align:middle;padding:1px 7px;white-space:nowrap}
+:root[data-theme="dark"] .badge.exp{background:#2e1f5e;color:#c4b5fd;border-color:#5b3fb5}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .badge.exp{background:#2e1f5e;color:#c4b5fd;border-color:#5b3fb5}}
+#side .nav a .badge.exp{margin-left:6px}
+.expnote{display:flex;gap:14px;justify-content:space-between;align-items:flex-start;border:1px solid #c4b5fd;background:var(--soft);border-radius:12px;padding:12px 16px;margin:0 0 14px;font-size:13.5px}.expnote ul{margin:6px 0 0 18px;padding:0;line-height:1.6}
