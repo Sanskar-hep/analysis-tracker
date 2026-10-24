@@ -40,6 +40,7 @@ the current repository from this device; your data stays in GitHub.
 The preview uses a fake in-memory GitHub, so data disappears when you stop it.
 
 ## How it behaves
+- **Guided tours** – in the public demo, 13 tours (`tour.js`) light up the real buttons and explain how to use each feature; the demo analyses carry sample data for every feature (eras, CADI, team list with several responses and decisions, AN PDFs, release, a sample presentation). Rule for new features: add demo data and a tour.
 - **Meeting Slides** – a top-level tab: choose Group or Collaboration meeting (or from scratch), pick plots from an analysis, type text blocks or upload figures, choose among 21 layouts (Text + Plots, Plots only, Text only), four themes, then edit on a slide canvas (drag to reorder, undo/redo, regenerate one slide), save drafts under `presentations/` in the data repository, and export a real editable deck: a .pptx, or a native Google Slides file via Google Drive (needs a free Google OAuth client ID, set in `config.js` as `googleClientId` or pasted once in the app; the client ID is public, the Google token is only sent to Google). Comments are optional content. Plots that get a newer version are flagged, never silently replaced.
 - **Make slides** – on the Plot Gallery (and each category) choose plots and versions and download a .pptx: title slide, one slide per plot with its facts (what changed, why, dataset, code, where used), optional before/after layout and a comments slide. Built in the browser by `slides.js`; Google Drive opens it as Google Slides.
 - **Public demo** – the front page has Explore Demo, Documentation, Login and Get Started. The demo is two read-only sample analyses (invented numbers, labelled DEMO) on an in-memory stand-in for GitHub (`demoFetch` in `backend.js`). Once built it refuses every write in the data layer, and the interface shows a 🔒 on editing buttons and a sign-in pop-up instead of forms. Signing in goes back to the action you wanted (e.g. New analysis).
@@ -111,6 +112,7 @@ The text is split into separate comments in your browser (cover note, greetings 
 - `slides.js` - quick slide deck (.pptx) from chosen plots, and the PowerPoint package writer
 - `deck.js` - Meeting Slides engine: themes, layouts, composer, PowerPoint and Google Slides export
 - `meeting.js` - Meeting Slides workspace and editor
+- `tour.js` - guided tours of the demo
 - `backend.js` - storage layer (git commits through the GitHub API) and all the rules
 - `config.js` - optional default repository
 - `server-version/` - the earlier Python-server edition with real server-side accounts (not used on GitHub)

@@ -94,7 +94,7 @@ window.LANDING = (() => {
         ${li('Slides from plots', 'choose plots and versions; one click makes a .pptx with each plot, what changed, why, dataset and comments, ready to open in Google Slides')}
         ${li('Export to Google Docs', 'one click builds a .docx with every comment, reply and plot; you drag it into Google Drive')}
         ${li('LaTeX helpers', 'update figures in your source zip and add figure and page references to replies')}
-        ${li('Public demo', 'two read-only sample analyses (invented numbers) you can open without signing in; every change is blocked and sign-in is offered instead')}
+        ${li('Public demo with guided tours', 'two read-only sample analyses (invented numbers) and a sample presentation, with 13 short guided tours that light up the real buttons and explain every feature; every change is blocked and sign-in is offered instead')}
         ${li('CADI line status', 'asked once per analysis and stored per analysis')}
       </ul></div>
       <div><h3 class="plan">Not available yet</h3><ul>

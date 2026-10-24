@@ -539,3 +539,14 @@ details.resp>summary{cursor:pointer;padding:8px 12px;font-size:13px;font-weight:
 .chkrow{display:flex;gap:8px;align-items:flex-start;font-size:13.5px;margin:8px 0}.cmpgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.cmpgrid img{width:100%;border:1px solid var(--line);border-radius:6px;background:#fff}
 .showwrap .canvas{max-width:none}
 @media (max-width:1180px){.msgrid{grid-template-columns:minmax(0,1fr)}.msleft,.msright{position:static;max-height:none}.msleft{order:2}.mscenter{order:1}.msright{order:3}.thumbs{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}}
+
+/* ===== Guided tours ===== */
+.tourgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;margin-top:8px}
+.tourcard{display:flex;flex-direction:column;gap:3px;text-align:left;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--panel);cursor:pointer;box-shadow:var(--shadow)}.tourcard:hover,.tourcard:focus{border-color:var(--acc);outline:none}.tourcard .ti{font-size:22px}.tourcard b{font-size:14px}
+#tourov{position:fixed;inset:0;z-index:400;pointer-events:none}
+.tour-block{position:fixed;inset:0;pointer-events:auto;background:transparent}
+.tour-spot{position:fixed;border-radius:10px;box-shadow:0 0 0 9999px rgba(8,11,16,.58),0 0 0 3px var(--acc);pointer-events:none;transition:left .2s,top .2s,width .2s,height .2s}
+.tour-card{position:fixed;background:var(--panel);color:var(--ink);border:1px solid var(--acc);border-radius:14px;box-shadow:0 10px 40px rgba(0,0,0,.45);padding:14px 16px;pointer-events:auto;z-index:410;max-height:calc(100vh - 24px);overflow:auto}
+.tour-card h4{margin:6px 0 4px;font-size:16px}.tour-card p{margin:0 0 10px;font-size:14px;line-height:1.55}.tour-card code{background:var(--soft);padding:0 4px;border-radius:4px}
+.tc-top{display:flex;justify-content:space-between;align-items:center;gap:8px}.tc-count{font-size:12px;color:var(--mut)}.tc-x{border:0;background:none;font-size:20px;line-height:1;cursor:pointer;color:var(--mut)}
+.tc-nav{display:flex;justify-content:space-between;gap:8px;margin-top:6px}

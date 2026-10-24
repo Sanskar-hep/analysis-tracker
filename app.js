@@ -342,7 +342,7 @@ function renderTop() {
   const repos = savedRepos(), repoSel = `<div class="ctxsel" title="Data repository"><span>📁</span><select data-act="setrepo" aria-label="Data repository">
       ${repos.map(r => `<option value="${esc(r)}" ${r === GHS.repo ? 'selected' : ''}>${esc(r)}</option>`).join('')}
       <option value="__add">＋ Add another repository…</option></select></div>`;
-  const user = GHS.demo ? `${S ? TEAM.chip() : ''}<div class="who"><span class="badge demo" title="Sample data kept in this browser tab only">Demo · nothing is saved</span><button class="btn sm primary" data-act="login">🔒 Sign in</button><button class="btn sm" data-act="exitdemo" title="Leave the demo">Exit demo</button></div>` : `${repoSel}${S ? TEAM.chip() : ''}<div class="who"><span title="Signed in to GitHub as ${esc(U.id)}">👤 ${esc(U.name)}</span><button class="btn sm" data-act="refresh" title="Load the latest changes from GitHub">↻</button><button class="btn sm" data-act="logout" title="Remove this repository from this device">Disconnect</button></div>`;
+  const user = GHS.demo ? `${S ? TEAM.chip() : ''}<div class="who"><span class="badge demo" title="Sample data kept in this browser tab only">Demo · nothing is saved</span><button class="btn sm" data-tour="open" title="Short walk-throughs of every feature">🧭 Guided tours</button><button class="btn sm primary" data-act="login">🔒 Sign in</button><button class="btn sm" data-act="exitdemo" title="Leave the demo">Exit demo</button></div>` : `${repoSel}${S ? TEAM.chip() : ''}<div class="who"><span title="Signed in to GitHub as ${esc(U.id)}">👤 ${esc(U.name)}</span><button class="btn sm" data-act="refresh" title="Load the latest changes from GitHub">↻</button><button class="btn sm" data-act="logout" title="Remove this repository from this device">Disconnect</button></div>`;
   let mid = '';
   if (S) {
     const c = ctx();
@@ -391,7 +391,9 @@ function viewHome() {
       <div class="badges" style="margin:0">${stageBadges(a)}</div>
       <div class="stats"><span><b>${a.plots}</b>plots</span><span><b>${a.versions}</b>AN versions</span><span><b style="${a.pending ? 'color:var(--pending)' : ''}">${a.pending}</b>pending</span></div></div>`).join('');
   if (GHS.demo) return `<div class="pagehead"><div><h1>Public demo <span class="badge demo">DEMO</span></h1><p>Read-only examples you can click through. All numbers, plots and comments are invented for illustration. They are not CMS results and no analysis here was approved by anyone.</p></div>
-    <div class="actions"><button class="btn primary" data-act="new-an">+ New analysis</button></div></div><div class="acards">${cards}</div>`;
+    <div class="actions"><button class="btn" data-tour="open">🧭 Guided tours</button><button class="btn primary" data-act="new-an">+ New analysis</button></div></div><div class="acards">${cards}</div>
+    <div class="sechead" style="margin-top:22px"><h2>Learn by doing</h2><span class="meta">Each tour lights up the real buttons and explains how to use them.</span></div>
+    <div class="tourgrid">${TOUR.TOURS.map(t => `<button type="button" class="tourcard" data-tour="start" data-id="${t.id}"><span class="ti">${t.icon}</span><b>${esc(t.title)}</b><span class="meta">${esc(t.blurb)}</span></button>`).join('')}</div>`;
   return `<div class="pagehead"><div><h1>My analyses</h1><p>Your group's analyses. Each has its own workspace; pick one to continue or start a new one.</p></div>
     <div class="actions"><button class="btn" data-act="tryDemo">Public demo</button><button class="btn" data-act="demo">Create demo analysis</button><button class="btn primary" data-act="new-an">+ New analysis</button></div></div>
     ${AL.length ? `<div class="acards">${cards}</div>` : `<div class="card empty"><p style="margin:0 0 12px">You don't have any analyses yet.</p><button class="btn primary" data-act="new-an">+ Create your first analysis</button></div>`}`;
@@ -1598,11 +1600,33 @@ async function createDemoInner() {
   await api('POST', ap(`/an-comments/${an2}/answer`), {answer: 'Agreed. We will add a short paragraph with the motivation and how y0 is chosen.'});
   await api('POST', ap('/documents'), {title: 'AN-24-123 v2 (PDF)', kind: 'AN draft', url: 'https://example.org/an-24-123-v2.pdf', an_version_id: st.an_versions[1].id, notes: 'Public version 2.'});
   await api('POST', ap('/documents'), {title: 'Analysis strategy', kind: 'Meeting notes', notes: 'Overall strategy agreed with the supervisor.'});
+  st = await api('GET', ap(''));
+  for (const v of st.an_versions) { const f = makePdf(anPages(v.number)); await storePdf(aid, v.id, f, await pdfFingerprint(f)); }
+  const wf = makePdf(anPages(3, true)), wup = await api('POST', ap('/upload'), undefined, {raw: wf}); await api('POST', ap('/working/pdf'), {file_id: wup.file_id, pdf: await pdfFingerprint(wf)});
   });
   return newId;
 }
 
-/* second sample analysis for the public demo: invented numbers, labelled as such */
+/* a tiny text-only PDF, so the AN PDF viewer, figure scan and AN comparison can be shown with sample data */
+function makePdf(pages) {
+  const pe = t => t.replace(/[\\()]/g, '\\$&'), objs = [], n = pages.length;
+  objs[0] = '<< /Type /Catalog /Pages 2 0 R >>'; objs[1] = `<< /Type /Pages /Kids [${pages.map((_, i) => `${4 + i * 2} 0 R`).join(' ')}] /Count ${n} >>`; objs[2] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>';
+  pages.forEach((lines, i) => {
+    const stream = 'BT /F1 13 Tf 72 740 Td 20 TL ' + lines.map(l => `(${pe(l)}) Tj T*`).join(' ') + ' ET';
+    objs[3 + i * 2] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents ${5 + i * 2} 0 R >>`;
+    objs[4 + i * 2] = `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`;
+  });
+  let out = '%PDF-1.4\n'; const off = [];
+  objs.forEach((o, i) => { off.push(out.length); out += `${i + 1} 0 obj\n${o}\nendobj\n`; });
+  const xr = out.length; out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n` + off.map(o => String(o).padStart(10, '0') + ' 00000 n \n').join('') + `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xr}\n%%EOF`;
+  return new File([out], 'AN-demo.pdf', {type: 'application/pdf'});
+}
+const anPages = (n, draft) => [
+  ['Analysis Note AN-24-123 (illustrative demo, invented content)', 'Top-Quark Charge Asymmetry', draft ? `Working draft toward version ${n}` : `Version ${n}`],
+  ['4 Results', 'Figure 4.2: Leading electron pT', 'Figure 4.3: Leading electron eta', n > 1 ? 'Figure 4.4: Leading muon pT' : 'The muon channel will be added later.'],
+  ['Table 10: Region definitions', 'Sec 1.1 Definition of A_in and A_out', `This page belongs to version ${n}${draft ? ' (draft)' : ''}.`],
+];
+/* second sample analysis for the public demo: invented numbers, labelled as such. It shows eras, the CADI badge, the team list and several responses */
 async function createHiggsDemo() {
   return batch(async () => {
     const aid = (await api('POST', '/analyses', {title: 'Demo · H→γγ Signal Strength', stage: 'an_stage', an_name: 'AN-00-000', collaboration: 'CMS', an_status: 'being_written'})).id;
@@ -1610,17 +1634,27 @@ async function createHiggsDemo() {
     await api('POST', ap('/cadi'), {status: 'yes', line: 'DEMO-00-000 (illustrative)', url: ''});
     const cat = (await api('POST', ap('/categories'), {name: 'Diphoton mass', parent_id: null})).id;
     const mgg = x => Math.exp(-(x - 125) * (x - 125) / 8) + .6 * Math.exp(-(x - 100) / 30);
-    const P = {title: 'm(γγ), inclusive', xl: 'm(γγ) [GeV]', xr: [100, 160], shape: mgg};
-    const ds = 'Illustrative sample, not real data';
-    const p = await api('POST', ap('/plots'), {category_id: cat, name: 'Diphoton invariant mass', location: 'p. 21 · Fig 6.1', version: {file_id: await up({...P, nb: 30, seed: 11}), summary: 'First look', changes: 'Initial version.', dataset: ds}});
-    await api('POST', ap(`/plots/${p.id}/versions`), {file_id: await up({...P, nb: 60, labels: true, ratio: true, legend: true, prelim: true, seed: 12, color: '#0e7490'}), summary: 'Finer binning, ratio panel', changes: 'Rebinned 30 → 60 bins; added ratio panel and legend.', motivation: 'Convener asked to resolve the peak shape.', dataset: ds});
-    await api('POST', ap('/versions'), {number: 1, published_on: new Date(Date.now() - 6 * 864e5).toISOString().slice(0, 10), notes: 'Illustrative first AN version.'});
-    const st = await api('GET', ap(''));
+    const P = {title: 'm(γγ)', xl: 'm(γγ) [GeV]', xr: [100, 160], shape: mgg}, ds = 'Illustrative sample, not real data';
+    const plots = [];
+    for (const [era, seed, col] of [['2016preVFP', 11, '#0e7490'], ['2016postVFP', 12, '#0369a1'], ['2017', 13, '#7c3aed']])      // 2018 is deliberately missing: the gallery reminds you
+      plots.push(await api('POST', ap('/plots'), {category_id: cat, name: `m_gg_${era}`, location: 'p. 21 · Fig 6.1', version: {file_id: await up({...P, title: `m(γγ) ${era}`, nb: 30, seed, color: col}), summary: 'First look', changes: 'Initial version.', dataset: ds}}));
+    const v2 = (await api('POST', ap(`/plots/${plots[2].id}/versions`), {file_id: await up({...P, title: 'm(γγ) 2017', nb: 60, labels: true, ratio: true, legend: true, prelim: true, seed: 14, color: '#7c3aed'}), summary: 'Finer binning, ratio panel', changes: 'Rebinned 30 → 60 bins; added ratio panel and legend.', motivation: 'Convener asked to resolve the peak shape.', dataset: ds})).id;
+    await api('POST', ap('/usages'), {plot_version_id: v2, type: 'note', fig: '6.1', an_ver: 'draft 1'});
+    await api('POST', ap('/versions'), {number: 1, published_on: new Date(Date.now() - 6 * 864e5).toISOString().slice(0, 10), notes: 'Illustrative first AN version.', skip_pdf_check: true});
+    let st = await api('GET', ap(''));
     const fig = st.usages.find(u => u.type === 'note' && u.an_version_id);
-    if (fig) {
-      const r = (await api('POST', ap(`/usages/${fig.id}/reviews`), {role: 'Reviewer 1', name: 'Example Reviewer', text: 'Please show the fit result overlaid on the mass distribution.'})).id;
-      await api('POST', ap(`/reviews/${r}/answer`), {answer: 'Will add the signal-plus-background fit in the next version.'});
-    }
+    const f1 = makePdf([['Analysis Note AN-00-000 (illustrative demo, invented content)', 'H to gamma gamma signal strength', 'Version 1'], ['6 Results', 'Figure 6.1: Diphoton invariant mass, 2017']]);
+    await storePdf(aid, st.an_versions[0].id, f1, await pdfFingerprint(f1));
+    const r = (await api('POST', ap(`/usages/${fig.id}/reviews`), {role: 'Reviewer 1', name: 'Example Reviewer', text: 'Please show the fit result overlaid on the mass distribution.'})).id;
+    // the owner lists the people who may answer; each person's answer is kept, the owner accepts one and discards another with a reason
+    await api('POST', ap('/team'), {names: ['Dana Lee', 'Marco Bianchi', 'Sam Okoye']});
+    await api('POST', ap(`/reviews/${r}/answer`), {answer: 'Will add the signal-plus-background fit in the next version.', _person: 'Dana Lee'});
+    await api('POST', ap(`/reviews/${r}/answer`), {answer: 'Will add the signal-plus-background fit, with the background-only fit as a dashed line.', _person: 'Dana Lee'});   // an edit: the first wording is kept
+    await api('POST', ap(`/reviews/${r}/answer`), {answer: 'No change needed, the peak is already clear.', _person: 'Marco Bianchi'});
+    st = await api('GET', ap(''));
+    const rv = st.usages.flatMap(u => u.reviews).find(x => x.id === r), resp = rv.responses;
+    await api('POST', ap(`/comments/${r}/responses/${resp.find(x => x.person === 'Dana Lee').id}/decide`), {action: 'select', _person: 'Dana Lee'});
+    await api('POST', ap(`/comments/${r}/responses/${resp.find(x => x.person === 'Marco Bianchi').id}/decide`), {action: 'discard', reason: 'The convener asked explicitly for the fit overlay.', _person: 'Marco Bianchi'});
     return aid;
   });
 }
@@ -1628,7 +1662,7 @@ let seeding = false;
 async function seedDemo() {                       // build both samples, then lock the demo repository for writing
   if (seeding) return; seeding = true;
   const hide = busy('Preparing the demo…');
-  try { await createDemoInner(); await createHiggsDemo(); demoLock(); await loadList(); go('#/'); render(); }
+  try { const tq = await createDemoInner(); await createHiggsDemo(); demoLock(); try { await MS.seedSample(tq); } catch (e2) { console.error(e2); } await loadList(); go('#/'); render(); TOUR.welcome(); }
   catch (e) { console.error(e); toast('Demo could not be prepared: ' + e.message, 'err', 20000); }
   finally { hide(); seeding = false; }
 }

@@ -611,5 +611,17 @@ window.MS = (() => {
   document.addEventListener('drop', e => { const t = e.target.closest && e.target.closest('.msthumb'); if (!t || dragI === null) return; e.preventDefault(); const to = +t.dataset.i, from = dragI; dragI = null; if (from === to) return redraw('l'); mut(d => { const s = d.slides.splice(from, 1)[0]; d.slides.splice(to, 0, s); ms.sel = to; }); });
   window.addEventListener('beforeunload', e => { if (ms.deck && ms.dirty && !lockedDemo()) { e.preventDefault(); e.returnValue = ''; } });
 
-  return {view, mounted, state: ms, redraw, slideHtml, generate, save, openDeck, checkStale};
+  /* a ready-made sample presentation for the public demo (kept in memory only; its text is invented and says so) */
+  async function seedSample(aid) {
+    const {N} = await getN(aid), keep = {deck: ms.deck, aid: ms.aid, picks: ms.picks, sel: ms.sel};
+    const d = D.newDeck({title: 'Sample: group meeting update', meetingType: 'group', presenter: 'Demo visitor', analysisName: 'AN-24-123', date: today(), sourceAid: aid, duration: 20});
+    d.slides.push(D.newSlide('t-title', {title: d.title, lead: 'Progress since the last meeting (sample content, invented)', origin: 'template'}));
+    ms.deck = d; ms.aid = aid; ms.picks = {}; libPlots(N).forEach(r => { ms.picks[r.p.id] = r.vs[r.vs.length - 1].id; });
+    d.slides.push(...generate({stype: 'auto', per: 1, facts: true, tmpl: true, agenda: true}));
+    const fill = (title, body) => { const s = d.slides.find(x => x.title === title); if (s) s.body = body; };
+    fill('Progress and completed tasks', 'Leading electron pT: four versions, now with a log-scale y axis and a Preliminary label\nReviewer 1 asked for a log axis and it was answered with a new plot version\nAN v2 published with the carried-over figures');
+    fill('Next steps', 'Answer the open convener comments on AN v2\nPublish AN v3 once the new PDF has been checked\nAdd the muon channel plots to the next version');
+    ms.mem.set(d.id, D.clone(d)); Object.assign(ms, keep);
+  }
+  return {view, mounted, seedSample, state: ms, redraw, slideHtml, generate, save, openDeck, checkStale};
 })();
