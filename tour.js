@@ -91,7 +91,7 @@ window.TOUR = (() => {
       {go: A(HG, '/activity'), sel: '#main .card, #main table', title: 'Activity log', text: 'Who did what and when: replies, decisions, new plots, resolved and reopened comments. You can filter by person or action. It can only grow; nothing is edited or deleted.'},
     ]},
     {id: 'gdocs', icon: '📄', title: 'Export to Google Docs', blurb: 'Comments, replies and plots in one document.', start: A(TQ, '/reviewer'), steps: [
-      {sel: '[data-act=gdoc]', title: 'One document with everything', text: 'Builds a Word file with every comment in a blue box, your reply in a green box, the action taken and the plots, as commented on and revised.', try: {label: 'Try it: build the document', run: () => GDOC.run()}},
+      {sel: '[data-act=gdoc]', title: 'One document with everything', text: 'Builds a Word file with every comment with your response, the action taken and the plots, as commented on and revised, in a plain numbered report layout.', try: {label: 'Try it: build the document', run: () => GDOC.run()}},
       {sel: '[data-act=reply-doc]', title: 'Or the point-by-point reply', text: 'The shorter reply document for the conveners, built from your answers.'},
     ]},
     {id: 'quickslides', icon: '🖼️', title: 'Quick slides from plots', blurb: 'Tick plots, get a PowerPoint file.', start: A(TQ, '/gallery'), steps: [
