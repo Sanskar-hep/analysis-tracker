@@ -7,14 +7,20 @@
  * Uses the app's globals (S, ver, plot, anv, fetchImage, busy, toast, openModal, ...) at call time. */
 (function () {
   'use strict';
-  const stLabel = {pending: 'Open', in_progress: 'In progress', resolved: 'Resolved'};
-    const MAXW = 2400;                                              // pictures wider than this are scaled down (keeps the file small)
+      /* the state of a comment, as on the website: in progress / answered (a reply is written) / open / resolved */
+  const ST = {
+    inprogress: {label: 'In progress', ink: '1D4ED8', tint: 'DBEAFE', rank: 0},
+    answered: {label: 'Answered', ink: '6D28D9', tint: 'EDE9FE', rank: 1},
+    pending: {label: 'Open', ink: 'B45309', tint: 'FEF3C7', rank: 2},
+    resolved: {label: 'Resolved', ink: '15803D', tint: 'DCFCE7', rank: 3}};
+  const stOf = c => c.status === 'resolved' ? 'resolved' : c.status === 'in_progress' ? 'inprogress' : (c.answer || '').trim() ? 'answered' : 'pending';
+  const MAXW = 2400;                                              // pictures wider than this are scaled down (keeps the file small)
 
   /* ---------- small XML helpers ---------- */
   const clean = s => String(s == null ? '' : s).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f￾￿]/g, '');
   const x = s => clean(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   const run = (t, o = {}) => {
-    const pr = (o.b ? '<w:b/>' : '') + (o.i ? '<w:i/>' : '') + (o.color ? `<w:color w:val="${o.color}"/>` : '') + (o.sz ? `<w:sz w:val="${o.sz}"/>` : '');
+    const pr = (o.b ? '<w:b/>' : '') + (o.i ? '<w:i/>' : o.i === false ? '<w:i w:val="0"/>' : '') + (o.color ? `<w:color w:val="${o.color}"/>` : '') + (o.sz ? `<w:sz w:val="${o.sz}"/>` : '');
     const parts = clean(t).split('\n');
     return parts.map((p, i) => `<w:r>${pr ? `<w:rPr>${pr}</w:rPr>` : ''}${i ? '<w:br/>' : ''}<w:t xml:space="preserve">${x(p)}</w:t></w:r>`).join('');
   };
@@ -61,7 +67,7 @@
   }
   /* a plain table: thin grey rules, no fills */
   const RULE = c => `<w:top w:val="single" w:sz="4" w:space="0" w:color="${c}"/><w:bottom w:val="single" w:sz="4" w:space="0" w:color="${c}"/>`;
-  const table = (cols, rows, o = {}) => `<w:tbl><w:tblPr><w:tblW w:w="${cols.reduce((a, b) => a + b, 0)}" w:type="dxa"/><w:tblBorders>${RULE('808080')}<w:insideH w:val="single" w:sz="4" w:space="0" w:color="BFBFBF"/>${o.grid ? '<w:left w:val="single" w:sz="4" w:space="0" w:color="808080"/><w:right w:val="single" w:sz="4" w:space="0" w:color="808080"/><w:insideV w:val="single" w:sz="4" w:space="0" w:color="BFBFBF"/>' : ''}</w:tblBorders><w:tblLayout w:type="fixed"/><w:tblCellMar><w:top w:w="60" w:type="dxa"/><w:left w:w="100" w:type="dxa"/><w:bottom w:w="60" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar></w:tblPr><w:tblGrid>${cols.map(w => `<w:gridCol w:w="${w}"/>`).join('')}</w:tblGrid>${rows.map(r => `<w:tr><w:trPr><w:cantSplit/></w:trPr>${r.map((c, i) => `<w:tc><w:tcPr><w:tcW w:w="${cols[i]}" w:type="dxa"/></w:tcPr>${c || para('')}</w:tc>`).join('')}</w:tr>`).join('')}</w:tbl>`;
+  const table = (cols, rows, o = {}) => `<w:tbl><w:tblPr><w:tblW w:w="${cols.reduce((a, b) => a + b, 0)}" w:type="dxa"/><w:tblBorders>${RULE('808080')}<w:insideH w:val="single" w:sz="4" w:space="0" w:color="BFBFBF"/>${o.grid ? '<w:left w:val="single" w:sz="4" w:space="0" w:color="808080"/><w:right w:val="single" w:sz="4" w:space="0" w:color="808080"/><w:insideV w:val="single" w:sz="4" w:space="0" w:color="BFBFBF"/>' : ''}</w:tblBorders><w:tblLayout w:type="fixed"/><w:tblCellMar><w:top w:w="60" w:type="dxa"/><w:left w:w="100" w:type="dxa"/><w:bottom w:w="60" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar></w:tblPr><w:tblGrid>${cols.map(w => `<w:gridCol w:w="${w}"/>`).join('')}</w:tblGrid>${rows.map((r, ri) => `<w:tr><w:trPr><w:cantSplit/></w:trPr>${r.map((c, i) => `<w:tc><w:tcPr><w:tcW w:w="${cols[i]}" w:type="dxa"/>${i === 0 && (Array.isArray(o.fill) ? o.fill[ri] : o.fill) ? `<w:shd w:val="clear" w:color="auto" w:fill="${Array.isArray(o.fill) ? o.fill[ri] : o.fill}"/>` : ''}</w:tcPr>${c || para('')}</w:tc>`).join('')}</w:tr>`).join('')}</w:tbl>`;
 
   /* ---------- what goes into the document ---------- */
   const numeric = (a, b) => String(a).localeCompare(String(b), undefined, {numeric: true});
@@ -74,7 +80,7 @@
       vs.forEach(v => { if (!imgs.some(i => i.v.id === v.id)) imgs.push({v, cap: `Revised plot: ${plot(v.plotId).name} ${verLabel(v)}`}); });
       return {title, c, vs, imgs};
     };
-    const section = (title, groups) => { groups = groups.filter(g => g.items.length); if (groups.length) secs.push({title, groups}); };
+    const section = (title, groups) => { groups = groups.filter(g => g.items.length); groups.forEach(g => g.items.sort((a, b) => ST[stOf(a.c)].rank - ST[stOf(b.c)].rank)); if (groups.length) secs.push({title, groups}); };
     // comments that belong to a plot / figure of the AN
     section('Comments on plots and figures', vers.map(v => ({label: anvLabel(v) + ' review', items: figGroups(S.usages.filter(u => u.type === 'note' && u.anvId === v.id).sort((a, b) => numeric(a.fig, b.fig))).flatMap(g => g.flatMap(u => u.reviews.filter(r => !r.none).map(r => {
       const pv = ver(u.versionId), p = plot(pv.plotId);
@@ -115,21 +121,25 @@
     B.push(info('Working version', REL.workingName()));
     B.push(info('Date', today()));
     B.push(para('', 'Meta'));
-    B.push(table([4200, 1400], [['Status', 'Comments'].map(h => para(run(h, {b: true}), 'Cell')), ...[['Open', cnt('pending')], ['In progress', cnt('in_progress')], ['Resolved', cnt('resolved')], ['Total', all.length]].map(r => [para(run(String(r[0]), {b: r[0] === 'Total'}), 'Cell'), para(run(String(r[1]), {b: r[0] === 'Total'}), 'Cell')])]));
+    const kinds = ['inprogress', 'answered', 'pending', 'resolved'], count = k => all.filter(c => stOf(c) === k).length;
+    B.push(table([4200, 1400], [['Status', 'Comments'].map(h => para(run(h, {b: true}), 'Cell')),
+      ...kinds.map(k => [para(run(ST[k].label, {b: true, color: ST[k].ink}), 'Cell'), para(run(String(count(k))), 'Cell')]),
+      [para(run('Total', {b: true}), 'Cell'), para(run(String(all.length), {b: true}), 'Cell')]], {fill: [null, ...kinds.map(k => ST[k].tint)]}));
+    B.push(para(run('Within each section the comments that are in progress or answered come first, then the open ones, then the resolved ones.', {i: true, sz: 19}), 'Meta'));
     secs.forEach((s, si) => {
       B.push(text(`${si + 1}  ${s.title}`, 'Heading1'));
       s.groups.forEach((g, gi) => {
         B.push(text(`${si + 1}.${gi + 1}  ${g.label}`, 'Heading2'));
         g.items.forEach((it, ii) => {
-          const c = it.c, st = c.status || 'pending', rp = replyText(c), act = (c.resolution || '').trim();
-          B.push(text(`${si + 1}.${gi + 1}.${ii + 1}  ${it.title}`, 'Heading3'));
-          const rows = [[para(run('Comment', {b: true}), 'Cell'), para(run(`${whoStr(c)}, ${fmtDate(c.created)}. Status: ${stLabel[st] || st}.`, {sz: 18}), 'Cell') + (lines(c.text, 'Cell') || para('', 'Cell'))]];
+          const c = it.c, st = stOf(c), rp = replyText(c), act = (c.resolution || '').trim();
+          B.push(para(run(`${si + 1}.${gi + 1}.${ii + 1}  ${it.title}   `) + run(`[${ST[st].label}]`, {b: true, i: false, color: ST[st].ink}), 'Heading3'));
+          const rows = [[para(run('Comment', {b: true}), 'Cell'), para(run(`${whoStr(c)}, ${fmtDate(c.created)}. Status: ${ST[st].label}.`, {sz: 18}), 'Cell') + (lines(c.text, 'Cell') || para('', 'Cell'))]];
           rows.push([para(run('Response', {b: true}), 'Cell'), rp ? lines(rp, 'Cell') : para(run('No response written yet.', {i: true}), 'Cell')]);
           if (act) rows.push([para(run('Action taken', {b: true}), 'Cell'), para(run(act), 'Cell')]);
           it.vs.forEach(v => { if ((v.changes || '').trim()) rows.push([para(run('Changes', {b: true}), 'Cell'), para(run(`${plot(v.plotId).name} ${verLabel(v)}: ${v.changes.trim()}`), 'Cell')]); });
           if (c.anchor && c.anchor.page) rows.push([para(run('AN PDF', {b: true}), 'Cell'), para(run('page ' + c.anchor.page), 'Cell')]);
           const miss = it.imgs.filter(i => !i.rec); if (miss.length) rows.push([para(run('Note', {b: true}), 'Cell'), para(run('Not embedded: ' + miss.map(i => i.cap).join('; ')), 'Cell')]);
-          B.push(table([1700, 7938], rows));
+          B.push(table([1700, 7938], rows, {fill: ST[st].tint}));
           B.push(para('', 'Cap'));
           B.push(pictures(it.imgs, media));
         });
@@ -172,7 +182,10 @@
   }
 
   const fileName = () => 'Response_to_comments_' + String(REL.workingName()).replace(/[^\w.-]+/g, '_') + '_' + today() + '.docx';
-  async function run_() {
+  const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', GDOCM = 'application/vnd.google-apps.document';
+
+  /* ---------- download the file ---------- */
+  async function download() {
     const done = busy('Preparing the document…');
     try {
       const r = await build((i, n) => done.set(`Collecting plots… ${i} of ${n}`));
@@ -183,5 +196,90 @@
         onSubmit: async () => { window.open('https://drive.google.com/drive/my-drive', '_blank', 'noopener'); }});
     } catch (e) { toast('Could not build the document: ' + e.message, 'err', 9000); } finally { done(); }
   }
-  window.GDOC = {run: run_, build, collect, fileName};
+
+  /* ---------- a Google Doc linked to this analysis ---------- */
+  /* The link (file id) lives on this device. Updating needs the user's own Google sign-in (token flow, "files created by this app"
+   * permission only), so it can run only while this page is open and the sign-in is still valid; otherwise "Update now" asks again. */
+  let forceReal = false;                                           // test hook: treat the demo as a real repository
+  const demoOn = () => !forceReal && typeof GHS !== 'undefined' && GHS.demo;
+  let demoLink = null, working = false, timer = null;
+  const lkKey = () => 'at_gdoc_' + (S && S.an ? S.an.id : '');
+  const getLink = () => { if (demoOn()) return demoLink || (demoLink = {id: 'demo', url: '#', name: 'Response to comments', at: Date.now(), sig: null}); try { return JSON.parse(localStorage.getItem(lkKey()) || 'null'); } catch { return null; } };
+  const setLink = v => { if (demoOn()) { demoLink = v; return; } try { v ? localStorage.setItem(lkKey(), JSON.stringify(v)) : localStorage.removeItem(lkKey()); } catch {} };
+  const sig = () => {                                              // changes whenever something the document shows changes
+    const j = JSON.stringify([S.usages.flatMap(u => u.reviews).filter(r => !r.none).map(r => [r.id, r.status, r.answer, r.resolution, r.text, r.resolvedVersionId, r.resolvedMore]), S.anc.map(c => [c.id, c.status, c.answer, c.resolution, c.text])]);
+    let h = 5381; for (let i = 0; i < j.length; i++) h = ((h << 5) + h + j.charCodeAt(i)) | 0; return String(h);
+  };
+  const clock = t => new Date(t).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+  function badgeInner() {
+    const lk = getLink(); if (!lk) return '';
+    if (working) return '<span class="dot"></span>Updating the Google Doc…';
+    const stale = !demoOn() && lk.sig !== sig();
+    const open = lk.url && lk.url !== '#' ? ` <a href="${esc(lk.url)}" target="_blank" rel="noopener noreferrer">Open</a>` : '';
+    return stale ? `<span class="dot"></span>Google Doc is out of date${lk.err ? ' (' + esc(lk.err) + ')' : ''} <button type="button" class="btn sm" data-gd="sync">Update now</button>${open}`
+      : `<span class="dot"></span>Google Doc ${demoOn() ? 'linked (demo)' : 'up to date, ' + clock(lk.at)}${open}`;
+  }
+  const badge = () => getLink() ? `<span class="gsync" data-gsync>${badgeInner()}</span>` : '';
+  const paint = () => document.querySelectorAll('[data-gsync]').forEach(el => { el.innerHTML = badgeInner(); el.classList.toggle('stale', !!getLink() && !working && !demoOn() && getLink().sig !== sig()); });
+
+  async function push(quiet) {
+    const lk = getLink(); if (!lk || working) return false;
+    if (demoOn()) { toast('Demo: in your own copy this updates your Google Doc (it cannot be done here).'); return false; }
+    working = true; paint();
+    try {
+      const mine = sig(), token = await DECK.googleToken(quiet), r = await build();
+      if (!r) throw Object.assign(new Error('There are no comments to export yet.'), {gcode: 'none'});
+      await DECK.driveUpload({token, blob: r.blob, from: DOCX, to: GDOCM, fileId: lk.id, name: lk.name});
+      setLink({...lk, at: Date.now(), sig: mine, err: ''}); if (!quiet) toast('The Google Doc was updated.'); return true;
+    } catch (e) {
+      const soft = ['denied', 'popup', 'auth'].includes(e.gcode) || /interaction_required|consent_required|login_required/.test(e.message || '');
+      setLink({...lk, err: soft ? 'Google sign-in needed' : e.message}); if (!quiet || !soft) toast('Google Doc not updated: ' + e.message, 'err', 9000); return false;
+    } finally { working = false; paint(); }
+  }
+  function changed() {                                             // called after every reload of the analysis data
+    const lk = getLink(); paint(); if (!lk || demoOn() || lk.sig === sig() || lk.off) return;
+    clearTimeout(timer); timer = setTimeout(() => push(true), 6000);
+  }
+  function setup(msg) {
+    openModal({title: 'Connect Google', submit: 'Save and continue', allowDemo: true,
+      sub: msg || 'A linked Google Doc needs a Google "OAuth client ID" for this website. It is a public identifier, not a secret. One-time setup (the same one Meeting Slides uses).',
+      body: `<ol style="margin:0 0 10px 18px;line-height:1.7"><li>Open <b>console.cloud.google.com</b>, create a project, and enable the <b>Google Drive API</b>.</li><li>Under <b>APIs &amp; Services → OAuth consent screen</b> set up the app (External is fine; add yourself as a test user).</li><li><b>Credentials → Create credentials → OAuth client ID → Web application</b>. Add <code>${esc(location.origin)}</code> under <i>Authorised JavaScript origins</i>.</li><li>Paste the client ID (ends in <code>.apps.googleusercontent.com</code>) below. It is saved on this device only.</li></ol>
+        ${field('OAuth client ID', `<input type="text" name="cid" value="${esc(DECK.clientId())}" placeholder="1234-abc.apps.googleusercontent.com" autocomplete="off" spellcheck="false">`, 'Only the Drive "files created by this app" permission is requested: the app cannot read your other Drive files.')}`,
+      onSubmit: async fd => { const v = (fd.get('cid') || '').trim(); if (!/\.apps\.googleusercontent\.com$/.test(v)) throw new Error('That does not look like a client ID. It should end in .apps.googleusercontent.com'); DECK.setClientId(v); setTimeout(link, 100); }});
+  }
+  async function link() {
+    if (demoOn()) { toast('In the demo the Google Doc is already shown as linked. Sign in with your own repository to link a real one.'); return; }
+    if (!DECK.clientId()) return setup();
+    const done = busy('Connecting to Google…');
+    try {
+      const token = await DECK.googleToken(false); done.set('Creating the Google Doc…');
+      const r = await build((i, n) => done.set(`Collecting plots… ${i} of ${n}`)); if (!r) { toast('There are no comments to export yet.'); return; }
+      const mine = sig(), name = `Response to comments - ${REL.workingName()}`;
+      const f = await DECK.driveUpload({token, name, blob: r.blob, from: DOCX, to: GDOCM});
+      setLink({id: f.id, url: f.webViewLink || `https://docs.google.com/document/d/${f.id}/edit`, name, at: Date.now(), sig: mine, err: ''}); paint();
+      openModal({title: 'Google Doc linked', submit: 'Open the Google Doc', allowDemo: true, sub: `<b>${esc(name)}</b> was created in your Google Drive with ${r.count} comment${r.count === 1 ? '' : 's'}.`,
+        body: `<p style="margin-top:0">From now on it is brought up to date a few seconds after you save an answer, resolve a comment or change its status, while this site is open in your browser.</p><p class="meta">Google sign-in lasts about an hour; after that a yellow <b>Update now</b> button appears and one click refreshes the document. Anything typed directly into the Google Doc is replaced at the next update, so make your changes on this site.</p>`,
+        onSubmit: async () => { window.open(getLink().url, '_blank', 'noopener'); }});
+    } catch (e) { if (e.gcode === 'noclient') setup(); else toast('Could not create the Google Doc: ' + e.message, 'err', 9000); } finally { done(); }
+  }
+  function hub() {
+    const lk = getLink();
+    const {m} = openModal({title: 'Export to Google Docs', submit: 'Close', allowDemo: true, sub: 'Every comment, your response and the plots, as a plain report. Comments in progress or answered are listed first.',
+      body: `<div class="f"><label class="l">Keep a Google Doc up to date</label>${lk
+        ? `<div class="gsync" data-gsync>${badgeInner()}</div><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><button type="button" class="btn sm primary" data-gd="sync">Update now</button><button type="button" class="btn sm" data-gd="unlink">Stop linking</button></div><div class="h">Updates itself a few seconds after you answer or resolve a comment, while this site is open and your Google sign-in is active. Text typed straight into the Google Doc is replaced at the next update.</div>`
+        : `<div class="h" style="margin:0 0 8px">Creates a Google Doc in your Drive and refreshes it whenever you answer or resolve a comment. Needs a one-time Google setup.</div><button type="button" class="btn primary" data-gd="link">Create a linked Google Doc</button>`}</div>
+      <div class="f"><label class="l">Or download a file</label><button type="button" class="btn" data-gd="download">Download .docx</button><div class="h">Open it in Google Docs yourself. Not connected to the website afterwards.</div></div>`,
+      onSubmit: async () => {}});
+    return m;
+  }
+  document.addEventListener('click', e => {
+    const b = e.target.closest('[data-gd]'); if (!b) return; e.preventDefault();
+    const k = b.dataset.gd, close = () => { const o = b.closest('.overlay'); if (o) o.remove(); };
+    if (k === 'download') { close(); download(); }
+    else if (k === 'link') { close(); link(); }
+    else if (k === 'sync') push(false);
+    else if (k === 'unlink') { setLink(null); close(); paint(); toast('Unlinked. The Google Doc stays in your Drive, but it will no longer be updated.'); }
+  });
+
+  window.GDOC = {_real: v => { forceReal = !!v; }, run: hub, download, build, collect, fileName, badge, changed, link, push, getLink, stOf};
 })();

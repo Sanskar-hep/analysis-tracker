@@ -42,7 +42,7 @@ function norm(st) {
   };
 }
 async function loadAnalysis(id) { S = norm(await api('GET', `/analyses/${id}`)); }
-async function reload() { await loadAnalysis(S.an.id); render(); }
+async function reload() { await loadAnalysis(S.an.id); render(); if (window.GDOC) GDOC.changed(); }
 async function loadList() { AL = (await api('GET', '/analyses')).analyses; }
 
 const CTX = {
@@ -466,10 +466,12 @@ function plotBadges(pid) {
 function pendRow(e) {
   if (e.an) {
     const c = e.c, meet = c.source === 'meeting';
-    return `<div class="row" data-go="${L(meet ? '/meetings' : '/reviewer')}" ${meet ? '' : `data-ctx="${c.anvId}"`}><div class="ancbox ${meet ? 'm' : ''}">${meet ? 'MTG' : 'AN'}</div><div class="t"><b>${c.location ? esc(c.location) : (meet ? esc(c.meeting) : 'Analysis Note')} ${meet ? `<span class="badge meeting">${esc(c.meeting)}</span>` : ctxBadge('note') + ' ' + ctxChip(c.anvId)}</b><span>${esc(whoStr(c))}: ${esc(c.text)}</span></div></div>`;
+    const [sc, sl] = stateOf(c.status, c.answer);
+    return `<div class="row st-${sc}" data-go="${L(meet ? '/meetings' : '/reviewer')}" ${meet ? '' : `data-ctx="${c.anvId}"`}><div class="ancbox ${meet ? 'm' : ''}">${meet ? 'MTG' : 'AN'}</div><div class="t"><b>${c.location ? esc(c.location) : (meet ? esc(c.meeting) : 'Analysis Note')} ${meet ? `<span class="badge meeting">${esc(c.meeting)}</span>` : ctxBadge('note') + ' ' + ctxChip(c.anvId)}</b><span>${esc(whoStr(c))}: ${esc(c.text)}</span></div><span class="badge ${sc}">${sl}</span></div>`;
   }
   const {u, r} = e, v = ver(u.versionId), p = plot(v.plotId), note = u.type === 'note';
-  return `<div class="row" data-go="${L('/plot/' + p.id)}" data-sel="${v.id}" data-ctx="${u.anvId || 'draft'}">${img(v)}<div class="t"><b>${esc(p.name)} <span class="badge">${verLabel(v)}</span> ${note ? ctxBadge('note', ' · Fig ' + esc(u.fig)) : `<span class="badge meeting">${esc(meetingName(u))}</span>`}${note && isPub() ? ' ' + ctxChip(u.anvId) : ''}</b><span>${esc(whoStr(r))}: ${esc(r.text)}</span></div></div>`;
+  const [sc, sl] = stateOf(r.status, r.answer);
+  return `<div class="row st-${sc}" data-go="${L('/plot/' + p.id)}" data-sel="${v.id}" data-ctx="${u.anvId || 'draft'}">${img(v)}<div class="t"><b>${esc(p.name)} <span class="badge">${verLabel(v)}</span> ${note ? ctxBadge('note', ' · Fig ' + esc(u.fig)) : `<span class="badge meeting">${esc(meetingName(u))}</span>`}${note && isPub() ? ' ' + ctxChip(u.anvId) : ''}</b><span>${esc(whoStr(r))}: ${esc(r.text)}</span></div><span class="badge ${sc}">${sl}</span></div>`;
 }
 
 /* "where are you?" prompts on the dashboard */
@@ -533,22 +535,28 @@ function viewDash() {
 }
 
 function viewPending() {
-  const f = ui.pf || 'all', list = allPending().filter(e => f === 'all' || entryKind(e) === f);
+  const f = ui.pf || 'all', list = allPending().filter(e => f === 'all' || entryKind(e) === f).sort((a, b) => byState(a.an ? a.c : a.r, b.an ? b.c : b.r));
   const chips = [['all', 'All'], ...(isAN() ? [['note', 'AN review']] : []), ['meeting', 'Meetings']];
   return `<div class="pagehead"><div><h1>Pending comments</h1><p>Everything that still needs an answer or an updated plot, across all AN versions, the working draft and all meetings.</p></div>
     <div class="chips">${chips.map(([t, l]) => `<span class="chip ${f === t ? 'on' : ''}" data-act="pfilter" data-id="${t}">${l}</span>`).join('')}</div></div>
-    <div class="card">${list.map(e => pendRow(e)).join('') || '<div class="empty">🎉 Nothing pending</div>'}</div>`;
+    ${legend()}<div class="card">${list.map(e => pendRow(e)).join('') || '<div class="empty">🎉 Nothing pending</div>'}</div>`;
 }
 
 function usageList(us, emptyMsg) {
   if (!us.length) return `<div class="card empty">${emptyMsg}</div>`;
-  return us.map(u => { const v = ver(u.versionId), p = plot(v.plotId);
+  return [...us].sort(byUse).map(u => { const v = ver(u.versionId), p = plot(v.plotId);
     return `<div class="uhead" data-go="${L('/plot/' + p.id)}" data-sel="${v.id}">${img(v)}<div><b>${esc(p.name)}</b> <span class="badge">${verLabel(v)}</span><div class="meta">${esc(catPath(p.catId))}</div></div></div>${usageCard(u)}`; }).join('');
 }
 
 /* ---- answers: one text box under every comment, saved when you click away ---- */
 const ansBox = (kind, id, val) => `<div class="ansbox"><label>Your answer</label><textarea class="ans" data-kind="${kind}" data-id="${id}" rows="2" maxlength="5000" placeholder="Write your reply to this comment…">${esc(val || '')}</textarea><span class="saved" aria-live="polite"></span></div>`;
 const stateOf = (status, answer) => status === 'resolved' ? ['resolved', '✓ Resolved'] : status === 'in_progress' ? ['inprogress', 'In progress'] : (answer || '').trim() ? ['answered', 'Answered'] : ['pending', 'Open'];
+/* order and colour: in progress first, then answered, then open, then resolved; every state has its own colour */
+const stRank = x => ({inprogress: 0, answered: 1, pending: 2, resolved: 3})[stateOf(x.status, x.answer)[0]];
+const byState = (a, b) => stRank(a) - stRank(b);
+const useRank = u => Math.min(9, ...u.reviews.filter(r => !r.none).map(stRank));
+const byUse = (a, b) => useRank(a) - useRank(b);
+const legend = () => `<div class="legend" title="The coloured bar on the left of every comment shows its state"><span class="lg inprogress">In progress</span><span class="lg answered">Answered</span><span class="lg pending">Open</span><span class="lg resolved">Resolved</span><span class="meta">Comments you have started on or answered are listed first.</span></div>`;
 function anchorLine(item, kind) {
   const an = item.anchor;
   if (an) return `<div class="anchor"><button class="link" data-act="open-pdf" data-kind="${kind}" data-id="${item.id}">📍 page ${an.page}${an.quote ? ' · “' + esc(an.quote.length > 70 ? an.quote.slice(0, 70) + '…' : an.quote) + '”' : ' · marked area'}</button></div>`;
@@ -558,7 +566,7 @@ function anchorLine(item, kind) {
 /* a comment that is not about a plot: AN text/table/methodology (from the convenors), or a methodology suggestion from a meeting */
 function ancCard(c) {
   const res = c.status === 'resolved', [cls, label] = stateOf(c.status, c.answer), meet = c.source === 'meeting';
-  return `<div class="card ucard ${meet ? 'meeting' : 'note'}" id="c-${c.id}"><div class="rv" style="border-top:0"><div><div class="who">${c.kind && c.kind !== 'text' ? `<span class="badge">${COMMENT_KINDS[c.kind] || ''}</span> ` : ''}${c.location ? `<span class="badge stage">${esc(c.location)}</span> ` : ''}${esc(whoStr(c))} <span class="meta">· ${fmtDate(c.created)}</span></div>
+  return `<div class="card ucard ${meet ? 'meeting' : 'note'} st-${cls}" id="c-${c.id}"><div class="rv" style="border-top:0"><div><div class="who">${c.kind && c.kind !== 'text' ? `<span class="badge">${COMMENT_KINDS[c.kind] || ''}</span> ` : ''}${c.location ? `<span class="badge stage">${esc(c.location)}</span> ` : ''}${esc(whoStr(c))} <span class="meta">· ${fmtDate(c.created)}</span></div>
       <div class="txt">${esc(c.text)}</div>${anchorLine(c, 'anc')}</div>
     <div class="ra"><span class="badge ${cls}">${label}</span>${res ? `<button class="btn sm" data-act="reopen-anc" data-id="${c.id}">Reopen</button>` : `<button class="btn sm primary" data-act="resolve-anc" data-id="${c.id}">Mark resolved</button>${statusBtn('anc', c)}<button class="btn sm" data-act="edit-anc" data-id="${c.id}">Edit</button>`}<button class="iconbtn" data-act="del-anc" data-id="${c.id}" title="Delete">🗑</button></div>
     <div style="grid-column:1/-1">${TEAM.block('anc', c)}</div>
@@ -578,12 +586,13 @@ function viewMeetings() {
   const sections = list.map(g => {
     const uses = [...g.uses].sort((x, y) => (parseFloat(x.slide) || 0) - (parseFloat(y.slide) || 0));
     return `<div class="sechead"><h2>${esc(g.name)} <span class="meta">${fmtDay(g.date)}</span></h2></div>
-      ${g.cmts.length ? `<div class="meta" style="margin:-4px 0 8px">Methodology and general suggestions</div>${g.cmts.map(ancCard).join('')}` : ''}
+      ${g.cmts.length ? `<div class="meta" style="margin:-4px 0 8px">Methodology and general suggestions</div>${[...g.cmts].sort(byState).map(ancCard).join('')}` : ''}
       ${uses.length ? `<div class="meta" style="margin:6px 0 0">Comments on plots</div>${usageList(uses, '')}` : ''}`;
   }).join('');
   return `<div class="pagehead"><div><h1>Meetings</h1><p>${all.length} meeting${all.length === 1 ? '' : 's'} · ${nP} pending comment${nP === 1 ? '' : 's'}. Comments about a plot and general methodology suggestions.</p></div>
-    <div class="actions"><button class="btn" data-act="import-email" data-type="meeting">Import comments from email</button><button class="btn" data-act="add-mplot">+ Plot shown in a meeting</button><button class="btn" data-act="gdoc" title="One file with every comment, its reply and the plots, ready to open as a Google Doc">Export to Google Docs</button><button class="btn danger" data-act="del-all-comments" data-scope="meeting">Delete all comments</button><button class="btn primary" data-act="add-mcomment">+ Methodology comment</button></div></div>
+    <div class="actions"><button class="btn" data-act="import-email" data-type="meeting">Import comments from email</button><button class="btn" data-act="add-mplot">+ Plot shown in a meeting</button><button class="btn" data-act="gdoc" title="One file with every comment, its reply and the plots, ready to open as a Google Doc">Export to Google Docs</button>${window.GDOC ? GDOC.badge() : ''}<button class="btn danger" data-act="del-all-comments" data-scope="meeting">Delete all comments</button><button class="btn primary" data-act="add-mcomment">+ Methodology comment</button></div></div>
     ${names.length > 1 ? `<div class="chips" style="margin-bottom:6px">${['all', ...names].map(n => `<span class="chip ${f === n ? 'on' : ''}" data-act="mfilter" data-id="${esc(n)}">${n === 'all' ? 'All meetings' : esc(n)}</span>`).join('')}</div>` : ''}
+    ${all.length ? legend() : ''}
     ${sections || '<div class="card empty">No meetings recorded yet. Use <b>+ Plot shown in a meeting</b> (a plot you presented), <b>+ Methodology comment</b> (a general suggestion), or open a plot and choose <b>+ Meeting</b>.</div>'}`;
 }
 
@@ -594,15 +603,16 @@ function viewReviewer() {
   const f = ui.rf || 'all', c = ctx(), kf = ui.rk || 'all';
   const figUs = cNotes().sort((a, b) => a.fig.localeCompare(b.fig, undefined, {numeric: true}));
   const figKeep = new Set(figGroups(figUs).filter(g => f === 'all' || g.some(u => u.reviews.some(r => !r.none && (f === 'resolved' ? r.status === 'resolved' : isOpen(r))))).map(g => g[0].fig));
-  const figShown = figUs.filter(u => figKeep.has(u.fig));
+  const figShown = figUs.filter(u => figKeep.has(u.fig)), figRank = new Map(); figGroups(figShown).forEach(g => figRank.set(g[0].fig, Math.min(...g.map(useRank)))); figShown.sort((a, b) => figRank.get(a.fig) - figRank.get(b.fig));
   const ancAll = S.anc.filter(x => x.source === 'an' && x.anvId === c.id);
-  const ancShown = ancAll.filter(x => (f === 'all' || (f === 'resolved' ? x.status === 'resolved' : isOpen(x))) && (kf === 'all' || x.kind === kf));
+  const ancShown = ancAll.filter(x => (f === 'all' || (f === 'resolved' ? x.status === 'resolved' : isOpen(x))) && (kf === 'all' || x.kind === kf)).sort(byState);
   const all = [...figUs.flatMap(u => u.reviews).filter(r => !r.none), ...ancAll], nP = all.filter(isOpen).length;
   const kinds = [...new Set(ancAll.map(x => x.kind))];
   const pdf = c.v.pdf;
   return `${banner()}<div class="pagehead"><div><h1>AN review · ${c.label}</h1><p>${nP} open · ${all.length - nP} resolved. These comments stay with ${c.label} even after newer versions are published.<br><span class="meta">AN PDF: ${pdf ? esc(pdf.name) + (pdf.file_id ? ' (stored in the repository: opens on any device)' : ' (kept on your computer only)') : 'not recorded yet'} — use <b>Open the AN PDF</b>.</span></p></div>
-    <div class="actions"><button class="btn" data-act="open-pdf" data-v="${c.id}">Open the AN PDF${pdf ? '' : ' …'}</button><button class="btn" data-act="import-email" data-type="note">Import comments from email</button><button class="btn" data-act="add-figure">+ Figure with several plots</button><button class="btn" data-act="link-comments" title="Put the comments that mention a figure onto that figure">Link comments to figures</button><button class="btn danger" data-act="del-all-comments" data-scope="an">Delete all comments</button><button class="btn" data-act="reply-doc">Reply document</button><button class="btn" data-act="gdoc" title="One file with every comment, its reply and the plots, ready to open as a Google Doc">Export to Google Docs</button><button class="btn primary" data-act="add-anc">+ Add comment</button></div></div>
+    <div class="actions"><button class="btn" data-act="open-pdf" data-v="${c.id}">Open the AN PDF${pdf ? '' : ' …'}</button><button class="btn" data-act="import-email" data-type="note">Import comments from email</button><button class="btn" data-act="add-figure">+ Figure with several plots</button><button class="btn" data-act="link-comments" title="Put the comments that mention a figure onto that figure">Link comments to figures</button><button class="btn danger" data-act="del-all-comments" data-scope="an">Delete all comments</button><button class="btn" data-act="reply-doc">Reply document</button><button class="btn" data-act="gdoc" title="One file with every comment, its reply and the plots, ready to open as a Google Doc">Export to Google Docs</button>${window.GDOC ? GDOC.badge() : ''}<button class="btn primary" data-act="add-anc">+ Add comment</button></div></div>
     <div class="chips" style="margin-bottom:6px">${[['all', 'All'], ['pending', 'Open'], ['resolved', 'Resolved']].map(([k, l]) => `<span class="chip ${f === k ? 'on' : ''}" data-act="rfilter" data-id="${k}">${l}</span>`).join('')}</div>
+    ${legend()}
     <div class="sechead"><h2>Comments on figures <span class="count">${figShown.length}</span></h2></div>
     ${figShown.length ? figGroups(figShown).map(figureCard).join('') : '<div class="card empty">No comments on figures yet. Figures appear here when a plot is recorded as an AN figure (open a plot → <b>+ Analysis Note</b>, or use <b>+ Figure with several plots</b>) and a comment is added to it.</div>'}
     <div class="sechead"><h2>Comments on text, tables and methodology <span class="count">${ancShown.length}</span></h2></div>
@@ -672,7 +682,7 @@ function reviewRow(u, r, opts = {}) {
   const vers = [r.resolvedVersionId, ...(r.resolvedMore || [])].map(id => id && ver(id)).filter(Boolean);
   const target = opts.group ? `<span class="badge ${r.scope === 'figure' ? '' : 'stage'}">${r.scope === 'figure' ? 'Whole figure' : esc(panelName(u))}</span> ` : '';
   const addMore = r.status === 'resolved' && !r.none ? `<br><button class="link" data-act="more-plot" data-id="${r.id}">＋ Add revised plot(s)</button>` : '';
-  return `<div class="rv"><div><div class="who">${target}${esc(whoStr(r))} <span class="meta">· ${fmtDate(r.created)}</span></div>
+  return `<div class="rv ${r.none ? '' : 'st-' + cls}"><div><div class="who">${target}${esc(whoStr(r))} <span class="meta">· ${fmtDate(r.created)}</span></div>
     ${r.none ? '<div class="txt none">No comments so far</div>' : `<div class="txt">${esc(r.text)}</div>`}${r.none ? '' : anchorLine(r, 'rev')}</div>
     <div class="ra">${r.none ? '' : `<span class="badge ${cls}">${label}</span>`}${act}<button class="iconbtn" data-act="del-rv" data-id="${r.id}" title="Delete">🗑</button></div>
     ${r.none ? '' : `<div style="grid-column:1/-1">${TEAM.block('rev', r)}</div>`}
@@ -687,7 +697,7 @@ function figureCard(uses) {
   const status = !rs.length ? '<span class="badge">No comments yet</span>' : `${pend ? `<span class="badge pending">${pend} open</span>` : ''}${res ? `<span class="badge resolved">${res} resolved</span>` : ''}`;
   return `<div class="card ucard note"><div class="uh"><div><div class="ti">Analysis Note · Figure ${esc(fig)}</div><span class="meta">${uses.length} plot${uses.length === 1 ? '' : 's'}${uses[0].anVer ? ' · ' + esc(uses[0].anVer) : ''}</span></div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${status}<button class="btn sm" data-act="add-rv" data-id="${uses[0].id}">+ Convener comment</button></div></div>
-    <div class="panels">${panels}</div>${rs.map(x => reviewRow(x.u, x.r, {group: uses.length > 1})).join('')}</div>`;
+    <div class="panels">${panels}</div>${[...rs].sort((a, b) => byState(a.r, b.r)).map(x => reviewRow(x.u, x.r, {group: uses.length > 1})).join('')}</div>`;
 }
 function usageCard(u) {
   const rs = u.reviews, pend = rs.filter(r => !r.none && isOpen(r)).length, res = rs.filter(r => !r.none && r.status === 'resolved').length, note = u.type === 'note';
@@ -697,7 +707,7 @@ function usageCard(u) {
     : `<span class="meta">${u.date ? fmtDay(u.date) + ' · ' : ''}${u.link ? `<a href="${esc(u.link)}" target="_blank" rel="noopener noreferrer">Open slides ↗</a>` : ''}</span>`;
   const status = locked ? '' : !rs.length ? '<span class="badge">No feedback recorded yet</span>'
     : `${pend ? `<span class="badge pending">${pend} pending</span>` : ''}${res ? `<span class="badge resolved">${res} resolved</span>` : ''}${!pend && !res ? '<span class="badge">No comments so far</span>' : ''}`;
-  const reviews = rs.map(r => reviewRow(u, r, {group: u.type === 'note' && sameFigUses(u).length > 1})).join('');
+  const reviews = [...rs].sort(byState).map(r => reviewRow(u, r, {group: u.type === 'note' && sameFigUses(u).length > 1})).join('');
   return `<div class="card ucard ${kindOf(u.type)}"><div class="uh"><div><div class="ti">${esc(useTitle(u))}</div>${detail}</div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${status}${locked ? '' : `<button class="btn sm" data-act="add-rv" data-id="${u.id}">+ ${note ? 'Convener' : 'Meeting'} comment</button>`}
     <button class="iconbtn" data-act="edit-use" data-id="${u.id}" title="Edit">✎</button>${u.anvId ? '' : `<button class="iconbtn" data-act="del-use" data-id="${u.id}" title="Remove">🗑</button>`}</div></div>
@@ -1595,9 +1605,12 @@ async function createDemoInner() {
   st = await api('GET', ap(''));
   const v2fig = st.usages.find(u => u.type === 'note' && u.fig === '4.2' && u.an_version_id === st.an_versions[1].id).id;
   await rv(v2fig, {role: 'Reviewer 1', name: 'A. Meyer', text: 'Thanks — please also state the integrated luminosity in the label.'});
-  await api('POST', ap('/an-comments'), {source: 'an', an_version_id: st.an_versions[1].id, role: 'Convener', name: 'L. Jeppe', kind: 'table', location: 'Tab 10', text: 'Are the labels in the “region type” column correct? Please double-check the region definitions.'});
+  const an1 = (await api('POST', ap('/an-comments'), {source: 'an', an_version_id: st.an_versions[1].id, role: 'Convener', name: 'L. Jeppe', kind: 'table', location: 'Tab 10', text: 'Are the labels in the “region type” column correct? Please double-check the region definitions.'})).id;
   const an2 = (await api('POST', ap('/an-comments'), {source: 'an', an_version_id: st.an_versions[1].id, role: 'Convener', name: 'L. Jeppe', kind: 'text', location: 'Sec 1.1', text: 'Explain a bit more the reasoning behind the definition of A_in and A_out.'})).id;
   await api('POST', ap(`/an-comments/${an2}/answer`), {answer: 'Agreed. We will add a short paragraph with the motivation and how y0 is chosen.'});
+  await api('POST', ap(`/an-comments/${an1}/status`), {status: 'in_progress'});
+  const an3 = (await api('POST', ap('/an-comments'), {source: 'an', an_version_id: st.an_versions[1].id, role: 'Convener', name: 'L. Jeppe', kind: 'equation', location: 'Eq 4', text: 'Please define the symbol y0 where it is first used.'})).id;
+  await api('POST', ap(`/an-comments/${an3}/resolve`), {note: 'Defined in the sentence before Eq 4.', resolved_in: st.an_versions[1].id});
   await api('POST', ap('/documents'), {title: 'AN-24-123 v2 (PDF)', kind: 'AN draft', url: 'https://example.org/an-24-123-v2.pdf', an_version_id: st.an_versions[1].id, notes: 'Public version 2.'});
   await api('POST', ap('/documents'), {title: 'Analysis strategy', kind: 'Meeting notes', notes: 'Overall strategy agreed with the supervisor.'});
   st = await api('GET', ap(''));

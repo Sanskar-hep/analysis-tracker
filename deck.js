@@ -258,8 +258,9 @@ window.DECK = (() => {
       document.head.appendChild(s);
     });
   }
-  async function googleToken() {
-    if (gTok && gTok.exp > Date.now() + 60000) return gTok.token;
+  const hasToken = () => !!(gTok && gTok.exp > Date.now() + 60000);
+  async function googleToken(quiet) {
+    if (hasToken()) return gTok.token;
     const cid = clientId(); if (!cid) throw GERR('noclient', 'Google is not set up yet.');
     await loadGsi();
     return new Promise((res, rej) => {
@@ -268,31 +269,38 @@ window.DECK = (() => {
           callback: r => { if (r.error) rej(GERR(r.error === 'access_denied' ? 'denied' : 'auth', r.error === 'access_denied' ? 'Google access was not granted.' : 'Google sign-in failed: ' + (r.error_description || r.error))); else { gTok = {token: r.access_token, exp: Date.now() + (+r.expires_in || 3000) * 1000}; res(gTok.token); } },
           error_callback: e => rej(GERR(e && e.type === 'popup_closed' ? 'denied' : 'popup', e && e.type === 'popup_failed_to_open' ? 'The Google sign-in window was blocked. Allow pop-ups for this site and try again.' : 'Google sign-in was closed before it finished.'))});
       } catch (e) { return rej(GERR('auth', 'Google sign-in could not start: ' + e.message)); }
-      tc.requestAccessToken({prompt: ''});
+      tc.requestAccessToken({prompt: quiet ? 'none' : ''});
     });
+  }
+  /* creates (no fileId) or replaces the content of (fileId) a native Google file made by converting an Office file */
+  async function driveUpload({token, name, blob, from, to, fileId}) {
+    const meta = fileId ? {mimeType: to} : {name, mimeType: to};
+    const b = '----at' + uid();
+    const body = new Blob([`--${b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${b}\r\nContent-Type: ${from}\r\n\r\n`, blob, `\r\n--${b}--`]);
+    const base = GCFG().googleUploadBase, url = (fileId ? base + '/' + encodeURIComponent(fileId) : base) + '?uploadType=multipart&fields=id,name,webViewLink';
+    let r;
+    try { r = await fetch(url, {method: fileId ? 'PATCH' : 'POST', headers: {Authorization: 'Bearer ' + token, 'Content-Type': 'multipart/related; boundary=' + b}, body}); }
+    catch { throw GERR('network', 'Google Drive could not be reached. Check your internet connection.'); }
+    if (!r.ok) {
+      let msg = ''; try { msg = ((await r.json()).error || {}).message || ''; } catch {}
+      if (r.status === 401) { gTok = null; throw GERR('auth', 'Your Google sign-in expired. Please try again.'); }
+      if (r.status === 404 && fileId) throw GERR('gone', 'The linked Google file could not be found (it was deleted, or it was not created by this website).');
+      if (r.status === 403) throw GERR('perm', 'Google refused the upload. Check that the Google Drive API is enabled for your OAuth project and that you allowed access to Drive. ' + msg);
+      throw GERR('http', `Google Drive returned an error (${r.status}). ${msg}`);
+    }
+    const f = await r.json(); if (!f.id) throw GERR('http', 'Google Drive did not return a file.');
+    return f;
   }
   async function exportGoogle(deck, progress) {
     const token = await googleToken();
     progress && progress('Building the presentation…');
     const built = await toPptx(deck, (i, n) => progress && progress(`Collecting plots… ${i} of ${n}`));
     progress && progress('Creating the Google Slides file in your Drive…');
-    const meta = {name: deck.title || 'Presentation', mimeType: 'application/vnd.google-apps.presentation'};
-    const b = '----at' + uid(), pptx = built.blob;
-    const body = new Blob([`--${b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${b}\r\nContent-Type: application/vnd.openxmlformats-officedocument.presentationml.presentation\r\n\r\n`, pptx, `\r\n--${b}--`]);
-    let r;
-    try { r = await fetch(GCFG().googleUploadBase + '?uploadType=multipart&fields=id,name,webViewLink', {method: 'POST', headers: {Authorization: 'Bearer ' + token, 'Content-Type': 'multipart/related; boundary=' + b}, body}); }
-    catch { throw GERR('network', 'Google Drive could not be reached. Check your internet connection.'); }
-    if (!r.ok) {
-      let msg = ''; try { msg = ((await r.json()).error || {}).message || ''; } catch {}
-      if (r.status === 401) { gTok = null; throw GERR('auth', 'Your Google sign-in expired. Please try again.'); }
-      if (r.status === 403) throw GERR('perm', 'Google refused the upload. Check that the Google Drive API is enabled for your OAuth project and that you allowed access to Drive. ' + msg);
-      throw GERR('http', `Google Drive returned an error (${r.status}). ${msg}`);
-    }
-    const f = await r.json(); if (!f.id) throw GERR('http', 'Google Drive did not return a file.');
+    const f = await driveUpload({token, name: deck.title || 'Presentation', blob: built.blob, from: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', to: 'application/vnd.google-apps.presentation'});
     return {id: f.id, url: f.webViewLink || GCFG().googleOpenBase + f.id + '/edit', slides: built.slides, missing: built.missing};
   }
   const forgetGoogle = () => { gTok = null; };
 
   return {THEMES, FONTS, LAYOUTS, LAYOUT, TYPES, FIELD_LABEL, SW, SH, uid, themeOf, compose, recommend, lines, parseBullets, skey, newSlide, newDeck, clone, slideWarnings, emptyText, fmtDate,
-    setResolver: f => { resolver = f; }, toPptx, exportGoogle, clientId, setClientId: v => { try { localStorage.setItem('at_gclient', (v || '').trim()); } catch {} }, forgetGoogle};
+    setResolver: f => { resolver = f; }, toPptx, exportGoogle, googleToken, hasToken, driveUpload, clientId, setClientId: v => { try { localStorage.setItem('at_gclient', (v || '').trim()); } catch {} }, forgetGoogle};
 })();

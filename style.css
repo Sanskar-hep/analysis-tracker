@@ -570,3 +570,22 @@ details.opts,details.rd{margin-top:14px;border:1px solid var(--line);border-radi
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .badge.exp{background:#2e1f5e;color:#c4b5fd;border-color:#5b3fb5}}
 #side .nav a .badge.exp{margin-left:6px}
 .expnote{display:flex;gap:14px;justify-content:space-between;align-items:flex-start;border:1px solid #c4b5fd;background:var(--soft);border-radius:12px;padding:12px 16px;margin:0 0 14px;font-size:13.5px}.expnote ul{margin:6px 0 0 18px;padding:0;line-height:1.6}
+
+/* colour markers: the state of every comment */
+:root{--st-open:#d98a0b;--st-prog:#2b6fe0;--st-ans:#7c3aed;--st-res:#2f9e5b}
+:root[data-theme=dark]{--st-open:#f2b24a;--st-prog:#6aa3ff;--st-ans:#b18cff;--st-res:#52c17f}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--st-open:#f2b24a;--st-prog:#6aa3ff;--st-ans:#b18cff;--st-res:#52c17f}}
+.rv.st-pending,.row.st-pending{--sc:var(--st-open)} .rv.st-inprogress,.row.st-inprogress{--sc:var(--st-prog)} .rv.st-answered,.row.st-answered{--sc:var(--st-ans)} .rv.st-resolved,.row.st-resolved{--sc:var(--st-res)}
+.rv[class*=st-]{border-left:4px solid var(--sc);background:color-mix(in srgb,var(--sc) 5%,transparent)}
+.row[class*=st-]{border-left:4px solid var(--sc);padding-left:10px}
+.ucard.st-pending{--c:var(--st-open)} .ucard.st-inprogress{--c:var(--st-prog)} .ucard.st-answered{--c:var(--st-ans)} .ucard.st-resolved{--c:var(--st-res)}
+.badge.pending{background:color-mix(in srgb,var(--st-open) 18%,transparent);color:var(--st-open)}
+.badge.inprogress{background:color-mix(in srgb,var(--st-prog) 18%,transparent);color:var(--st-prog)}
+.badge.answered{background:color-mix(in srgb,var(--st-ans) 16%,transparent);color:var(--st-ans)}
+.badge.resolved{background:color-mix(in srgb,var(--st-res) 16%,transparent);color:var(--st-res)}
+.legend{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 12px;font-size:12.5px}
+.legend .lg{display:inline-flex;align-items:center;gap:6px;font-weight:600}
+.legend .lg:before{content:"";width:10px;height:10px;border-radius:3px;background:var(--sc)}
+.lg.pending{--sc:var(--st-open)} .lg.inprogress{--sc:var(--st-prog)} .lg.answered{--sc:var(--st-ans)} .lg.resolved{--sc:var(--st-res)}
+.gsync{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:12.5px}
+.gsync .dot{width:9px;height:9px;border-radius:50%;background:var(--st-res)} .gsync.stale .dot{background:var(--st-open)}
