@@ -8,11 +8,12 @@
 (function () {
   'use strict';
       /* the state of a comment, as on the website: in progress / answered (a reply is written) / open / resolved */
+  const PURPLE = '7030A0', GREEN = '2E7D32', RED = 'C00000';
   const ST = {
-    inprogress: {label: 'In progress', ink: '1D4ED8', tint: 'DBEAFE', rank: 0},
-    answered: {label: 'Answered', ink: '6D28D9', tint: 'EDE9FE', rank: 1},
-    pending: {label: 'Open', ink: 'B45309', tint: 'FEF3C7', rank: 2},
-    resolved: {label: 'Resolved', ink: '15803D', tint: 'DCFCE7', rank: 3}};
+    inprogress: {label: 'In progress', ink: PURPLE, rank: 0},
+    answered: {label: 'Answered', ink: GREEN, rank: 1},
+    resolved: {label: 'Answered', ink: GREEN, rank: 2},
+    pending: {label: 'Open', ink: RED, rank: 3}};
   const stOf = c => c.status === 'resolved' ? 'resolved' : c.status === 'in_progress' ? 'inprogress' : (c.answer || '').trim() ? 'answered' : 'pending';
   const MAXW = 2400;                                              // pictures wider than this are scaled down (keeps the file small)
 
@@ -56,7 +57,7 @@
       + `<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="${id}" name="plot${id}"/><pic:cNvPicPr/></pic:nvPicPr>`
       + `<pic:blipFill><a:blip r:embed="${rid}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>`;
   }
-  const capP = t => para(run(t, {i: true, sz: 18}), 'Cap');
+  const capP = t => para(run(t, {sz: 18}), 'Cap');
   function pictures(imgs, media) {                                // one picture alone, or a two-column table (as reviewed | revised)
     const ok = imgs.filter(i => i.rec);
     const cell = (i, w, maxIn) => `<w:tc><w:tcPr><w:tcW w:w="${w}" w:type="dxa"/></w:tcPr>${para(drawing(i.rec, 'rIdM' + i.rec.n, maxIn), 'Pic')}${capP(i.cap)}</w:tc>`;
@@ -74,25 +75,25 @@
   function collect() {
     const vers = [...S.anv].sort((a, b) => a.number - b.number), secs = [];
     const vsOf = c => [c.resolvedVersionId, ...(c.resolvedMore || [])].map(id => id && ver(id)).filter(Boolean);
-    const item = (title, c, reviewed) => {
+    const item = (title, c, reviewed, where) => {
       const vs = vsOf(c), imgs = [];
       if (reviewed) imgs.push({v: reviewed, cap: `As commented on: ${plot(reviewed.plotId).name} ${verLabel(reviewed)}`});
       vs.forEach(v => { if (!imgs.some(i => i.v.id === v.id)) imgs.push({v, cap: `Revised plot: ${plot(v.plotId).name} ${verLabel(v)}`}); });
-      return {title, c, vs, imgs};
+      return {title, c, vs, imgs, where: where || ''};
     };
     const section = (title, groups) => { groups = groups.filter(g => g.items.length); groups.forEach(g => g.items.sort((a, b) => ST[stOf(a.c)].rank - ST[stOf(b.c)].rank)); if (groups.length) secs.push({title, groups}); };
     // comments that belong to a plot / figure of the AN
     section('Comments on plots and figures', vers.map(v => ({label: anvLabel(v) + ' review', items: figGroups(S.usages.filter(u => u.type === 'note' && u.anvId === v.id).sort((a, b) => numeric(a.fig, b.fig))).flatMap(g => g.flatMap(u => u.reviews.filter(r => !r.none).map(r => {
       const pv = ver(u.versionId), p = plot(pv.plotId);
-      return item(`Figure ${u.fig}${r.scope === 'figure' ? ' (whole figure)' : u.panel ? ' (' + u.panel + ')' : ''}: ${p.name} ${verLabel(pv)}, ${catPath(p.catId)}${p.location ? '; location in the AN: ' + p.location : ''}`, r, pv);
+      return item(`Figure ${u.fig}${r.scope === 'figure' ? ' (whole figure)' : u.panel ? ' (' + u.panel + ')' : ''}: ${p.name} ${verLabel(pv)}, ${catPath(p.catId)}${p.location ? '; location in the AN: ' + p.location : ''}`, r, pv, `Figure ${u.fig}${r.scope === 'figure' ? '' : u.panel ? ' (' + u.panel + ')' : ''}`);
     })))})));
-    const byKind = kinds => vers.map(v => ({label: anvLabel(v) + ' review', items: S.anc.filter(c => c.source === 'an' && c.anvId === v.id && kinds.includes(c.kind)).map(c => item(c.location || COMMENT_KINDS[c.kind], c, null))}));
+    const byKind = kinds => vers.map(v => ({label: anvLabel(v) + ' review', items: S.anc.filter(c => c.source === 'an' && c.anvId === v.id && kinds.includes(c.kind)).map(c => item(c.location || COMMENT_KINDS[c.kind], c, null, c.location || ''))}));
     section('Methodology comments', byKind(['methodology']));
     section('General analysis comments', byKind(['general']));
     section('Comments on the text, tables and equations', byKind(['text', 'table', 'equation', 'figure']));
     const meet = new Map(), mk = (nm, d) => { const k = nm + '|' + (d || ''); if (!meet.has(k)) meet.set(k, {label: `${nm}${d ? ', ' + fmtDay(d) : ''}`, items: []}); return meet.get(k); };
-    S.usages.filter(u => u.type !== 'note').forEach(u => u.reviews.filter(r => !r.none).forEach(r => { const pv = ver(u.versionId), p = plot(pv.plotId); mk(meetingName(u), u.date).items.push(item(`${p.name} ${verLabel(pv)}${u.slide ? ', slide ' + u.slide : ''}`, r, pv)); }));
-    S.anc.filter(c => c.source === 'meeting').forEach(c => mk(c.meeting, c.meeting_date).items.push(item(`${COMMENT_KINDS[c.kind] || 'Comment'}${c.location ? ': ' + c.location : ''}`, c, null)));
+    S.usages.filter(u => u.type !== 'note').forEach(u => u.reviews.filter(r => !r.none).forEach(r => { const pv = ver(u.versionId), p = plot(pv.plotId); mk(meetingName(u), u.date).items.push(item(`${p.name} ${verLabel(pv)}${u.slide ? ', slide ' + u.slide : ''}`, r, pv, `${p.name} ${verLabel(pv)}`)); }));
+    S.anc.filter(c => c.source === 'meeting').forEach(c => mk(c.meeting, c.meeting_date).items.push(item(`${COMMENT_KINDS[c.kind] || 'Comment'}${c.location ? ': ' + c.location : ''}`, c, null, c.location || '')));
     section('Meeting comments', [...meet.values()].sort((a, b) => a.label.localeCompare(b.label)));
     return secs;
   }
@@ -111,55 +112,41 @@
     // numbers are assigned after loading so that every stored picture has one
     let n = 0; media.forEach(r => { if (r) r.n = ++n; });
     items.forEach(it => it.imgs.forEach(i => { i.rec = media.get(i.v.file_id) || null; }));
-    const all = items.map(i => i.c), cnt = k => all.filter(c => (c.status || 'pending') === k).length, B = [];
+    items.sort((p, q) => ST[stOf(p.c)].rank - ST[stOf(q.c)].rank);          // in progress, answered, then open
+    const all = items.map(i => i.c), B = [], count = k => all.filter(c => ST[stOf(c)].label === k).length;
     DOCPR = 1;
-    const info = (k, v) => v ? para(run(k + ': ', {b: true}) + run(v), 'Meta') : '';
-    B.push(text('Response to review comments', 'Title'));
-    B.push(info('Analysis', S.an.title));
-    B.push(info('Analysis note', S.an.an_name));
-    B.push(info('Collaboration', S.an.collaboration));
-    B.push(info('Working version', REL.workingName()));
-    B.push(info('Date', today()));
+    const when = new Date().toLocaleDateString('en-GB', {day: 'numeric', month: 'long', year: 'numeric'});
+    B.push(text(`${S.an.an_name || S.an.title}: comments and replies`, 'Title'));
+    B.push(text(`${S.an.an_name ? S.an.title + '. ' : ''}Updated ${when}.`, 'Meta'));
     B.push(para('', 'Meta'));
-    const kinds = ['inprogress', 'answered', 'pending', 'resolved'], count = k => all.filter(c => stOf(c) === k).length;
-    B.push(table([4200, 1400], [['Status', 'Comments'].map(h => para(run(h, {b: true}), 'Cell')),
-      ...kinds.map(k => [para(run(ST[k].label, {b: true, color: ST[k].ink}), 'Cell'), para(run(String(count(k))), 'Cell')]),
-      [para(run('Total', {b: true}), 'Cell'), para(run(String(all.length), {b: true}), 'Cell')]], {fill: [null, ...kinds.map(k => ST[k].tint)]}));
-    B.push(para(run('Within each section the comments that are in progress or answered come first, then the open ones, then the resolved ones.', {i: true, sz: 19}), 'Meta'));
-    secs.forEach((s, si) => {
-      B.push(text(`${si + 1}  ${s.title}`, 'Heading1'));
-      s.groups.forEach((g, gi) => {
-        B.push(text(`${si + 1}.${gi + 1}  ${g.label}`, 'Heading2'));
-        g.items.forEach((it, ii) => {
-          const c = it.c, st = stOf(c), rp = replyText(c), act = (c.resolution || '').trim();
-          B.push(para(run(`${si + 1}.${gi + 1}.${ii + 1}  ${it.title}   `) + run(`[${ST[st].label}]`, {b: true, i: false, color: ST[st].ink}), 'Heading3'));
-          const rows = [[para(run('Comment', {b: true}), 'Cell'), para(run(`${whoStr(c)}, ${fmtDate(c.created)}. Status: ${ST[st].label}.`, {sz: 18}), 'Cell') + (lines(c.text, 'Cell') || para('', 'Cell'))]];
-          rows.push([para(run('Response', {b: true}), 'Cell'), rp ? lines(rp, 'Cell') : para(run('No response written yet.', {i: true}), 'Cell')]);
-          if (act) rows.push([para(run('Action taken', {b: true}), 'Cell'), para(run(act), 'Cell')]);
-          it.vs.forEach(v => { if ((v.changes || '').trim()) rows.push([para(run('Changes', {b: true}), 'Cell'), para(run(`${plot(v.plotId).name} ${verLabel(v)}: ${v.changes.trim()}`), 'Cell')]); });
-          if (c.anchor && c.anchor.page) rows.push([para(run('AN PDF', {b: true}), 'Cell'), para(run('page ' + c.anchor.page), 'Cell')]);
-          const miss = it.imgs.filter(i => !i.rec); if (miss.length) rows.push([para(run('Note', {b: true}), 'Cell'), para(run('Not embedded: ' + miss.map(i => i.cap).join('; ')), 'Cell')]);
-          B.push(table([1700, 7938], rows, {fill: ST[st].tint}));
-          B.push(para('', 'Cap'));
-          B.push(pictures(it.imgs, media));
-        });
-      });
+    const key = [['In progress', PURPLE], ['Answered', GREEN], ['Open', RED]];
+    B.push(table([2200, 2200, 2200], [key.map(([l, c]) => para(run(l, {b: true, color: c}), 'Mid')), key.map(([l]) => para(run(String(count(l))), 'Mid'))], {grid: true}));
+    B.push(para(run('The colour of each comment shows where it stands. Those in progress or answered come first.', {sz: 19}), 'Meta', '<w:spacing w:before="120" w:after="60"/>'));
+    items.forEach(it => {
+      const c = it.c, st = stOf(c), ink = ST[st].ink, rp = replyText(c), act = (c.resolution || '').trim();
+      const by = [whoStr(c), it.where ? '(' + it.where + ')' : '', fmtDate(c.created)].filter(Boolean).join(' ');
+      B.push(para(run(by, {b: true, color: ink}), 'Cm'));
+      String(c.text || '').split(/\n{2,}/).map(t => t.trim()).filter(Boolean).forEach(t => B.push(para(run(t, {color: ink}), 'Txt')));
+      const ans = [rp, act && act !== (c.answer || '').trim() ? act : ''].filter(Boolean).join('\n\n').split(/\n{2,}/).map(t => t.trim()).filter(Boolean);
+      if (ans.length) ans.forEach((t, i) => B.push(para((i ? '' : run('Answer: ', {b: true})) + run(t), 'Ans')));
+      else B.push(para(run('Answer: ', {b: true}) + run('not answered yet.'), 'Ans'));
+      B.push(pictures(it.imgs, media));
     });
     return {body: B.join(''), media, count: all.length, plots: n};
   }
 
   const NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"';
-  const F = 'Times New Roman';
+  const F = 'Arial';
   const STYLES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="${F}" w:hAnsi="${F}" w:cs="${F}"/><w:sz w:val="22"/><w:lang w:val="en-GB"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="120" w:line="259" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults>
+<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="${F}" w:hAnsi="${F}" w:cs="${F}"/><w:sz w:val="21"/><w:lang w:val="en-GB"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="100" w:line="264" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults>
 <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
-<w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:pPr><w:spacing w:after="200"/></w:pPr><w:rPr><w:b/><w:sz w:val="36"/></w:rPr></w:style>
-<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:pPr><w:keepNext/><w:spacing w:before="400" w:after="140"/><w:outlineLvl w:val="0"/></w:pPr><w:rPr><w:b/><w:sz w:val="28"/></w:rPr></w:style>
-<w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:pPr><w:keepNext/><w:spacing w:before="280" w:after="100"/><w:outlineLvl w:val="1"/></w:pPr><w:rPr><w:b/><w:sz w:val="24"/></w:rPr></w:style>
-<w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="heading 3"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:pPr><w:keepNext/><w:spacing w:before="240" w:after="80"/><w:outlineLvl w:val="2"/></w:pPr><w:rPr><w:b/><w:i/><w:sz w:val="22"/></w:rPr></w:style>
-<w:style w:type="paragraph" w:styleId="Meta"><w:name w:val="Meta"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="40"/></w:pPr></w:style>
-<w:style w:type="paragraph" w:styleId="Cell"><w:name w:val="Table text"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="60" w:line="252" w:lineRule="auto"/></w:pPr><w:rPr><w:sz w:val="21"/></w:rPr></w:style>
-<w:style w:type="paragraph" w:styleId="Cap"><w:name w:val="Picture caption"/><w:basedOn w:val="Normal"/><w:pPr><w:jc w:val="center"/><w:spacing w:before="40" w:after="200"/></w:pPr></w:style>
+<w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:pPr><w:spacing w:after="60"/></w:pPr><w:rPr><w:b/><w:sz w:val="32"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="Meta"><w:name w:val="Meta"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="60"/></w:pPr></w:style>
+<w:style w:type="paragraph" w:styleId="Mid"><w:name w:val="Table text"/><w:basedOn w:val="Normal"/><w:pPr><w:jc w:val="center"/><w:spacing w:before="40" w:after="40"/></w:pPr></w:style>
+<w:style w:type="paragraph" w:styleId="Cm"><w:name w:val="Comment by"/><w:basedOn w:val="Normal"/><w:next w:val="Txt"/><w:pPr><w:keepNext/><w:pBdr><w:top w:val="single" w:sz="4" w:space="10" w:color="BFBFBF"/></w:pBdr><w:spacing w:before="280" w:after="40"/></w:pPr></w:style>
+<w:style w:type="paragraph" w:styleId="Txt"><w:name w:val="Comment text"/><w:basedOn w:val="Normal"/><w:pPr><w:keepNext/><w:spacing w:after="80"/></w:pPr></w:style>
+<w:style w:type="paragraph" w:styleId="Ans"><w:name w:val="Answer"/><w:basedOn w:val="Normal"/><w:pPr><w:ind w:left="360"/><w:spacing w:after="80"/></w:pPr></w:style>
+<w:style w:type="paragraph" w:styleId="Cap"><w:name w:val="Picture caption"/><w:basedOn w:val="Normal"/><w:pPr><w:jc w:val="center"/><w:spacing w:before="40" w:after="120"/></w:pPr></w:style>
 <w:style w:type="paragraph" w:styleId="Pic"><w:name w:val="Picture"/><w:basedOn w:val="Normal"/><w:pPr><w:keepNext/><w:jc w:val="center"/><w:spacing w:before="120" w:after="0"/></w:pPr></w:style>
 <w:style w:type="paragraph" w:styleId="Footer"><w:name w:val="footer"/><w:basedOn w:val="Normal"/><w:pPr><w:jc w:val="center"/><w:spacing w:after="0"/></w:pPr><w:rPr><w:sz w:val="18"/></w:rPr></w:style>
 </w:styles>`;
@@ -264,7 +251,7 @@
   }
   function hub() {
     const lk = getLink();
-    const {m} = openModal({title: 'Export to Google Docs', submit: 'Close', allowDemo: true, sub: 'Every comment, your response and the plots, as a plain report. Comments in progress or answered are listed first.',
+    const {m} = openModal({title: 'Export to Google Docs', submit: 'Close', allowDemo: true, sub: 'Every comment and your answer, with its plots. Comments in progress or answered are listed first.',
       body: `<div class="f"><label class="l">Keep a Google Doc up to date</label>${lk
         ? `<div class="gsync" data-gsync>${badgeInner()}</div><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><button type="button" class="btn sm primary" data-gd="sync">Update now</button><button type="button" class="btn sm" data-gd="unlink">Stop linking</button></div><div class="h">Updates itself a few seconds after you answer or resolve a comment, while this site is open and your Google sign-in is active. Text typed straight into the Google Doc is replaced at the next update.</div>`
         : `<div class="h" style="margin:0 0 8px">Creates a Google Doc in your Drive and refreshes it whenever you answer or resolve a comment. Needs a one-time Google setup.</div><button type="button" class="btn primary" data-gd="link">Create a linked Google Doc</button>`}</div>

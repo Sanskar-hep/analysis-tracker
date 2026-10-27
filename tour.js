@@ -37,7 +37,7 @@ window.TOUR = (() => {
       {sel: '#main .usehead', title: 'Where the plot is used', text: 'The AN figure or meeting slide that uses this version, with the comments about it underneath.'},
     ]},
     {id: 'comments', icon: '💬', title: 'Comments and replies', blurb: 'Import comments, answer them, resolve with a revised plot.', start: A(TQ, '/reviewer'), steps: [
-      {sel: '.legend', title: 'Colours show the state', text: 'Every comment has a coloured bar: blue = in progress, purple = answered, amber = open, green = resolved. The ones you have started on or answered are listed first, so you do not have to search.'},
+      {sel: '.legend', title: 'Colours show the state', text: 'Every comment has a coloured bar: purple = in progress, green = answered or resolved, red = open. The ones you have started on or answered are listed first, so you do not have to search.'},
       {sel: '[data-act=add-anc]', title: 'Add a comment', text: 'Type in a comment from a convener or reviewer: on a figure, a table, an equation or the analysis in general.'},
       {sel: '[data-act=import-email]', title: 'Paste an email, get separate comments', text: 'Paste the whole review email. The tracker splits it into one comment per point and links a comment that mentions “Fig 10” to Fig 10.'},
       {sel: '[data-act=add-figure]', title: 'A figure with several plots', text: 'For figures made of several panels, such as one plot per era, record all the plots that belong to the figure.'},
